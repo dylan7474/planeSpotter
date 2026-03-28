@@ -228,7 +228,13 @@
             radar: document.getElementById('radar-canvas'),
             weatherStatus: document.getElementById('weather-status'),
             btnToggleList: document.getElementById('btn-toggle-list'),
-            mapOverlay: document.getElementById('map-overlay')
+            mapOverlay: document.getElementById('map-overlay'),
+            dumpIp: document.getElementById('dump-ip'),
+            myLat: document.getElementById('my-lat'),
+            myLon: document.getElementById('my-lon'),
+            camAz: document.getElementById('cam-az'),
+            autoSnap: document.getElementById('auto-snap'),
+            snapClearOnly: document.getElementById('snap-clear-only')
         };
 
         let activePlanes = [];
@@ -253,6 +259,7 @@
             elements.btnToggleList.onclick = togglePlaneList;
             elements.mapOverlay.addEventListener('change', (e) => {
                 config.mapOverlay = e.target.checked;
+                saveSettings();
                 drawRadar();
             });
 
@@ -260,8 +267,22 @@
             elements.distSlider.addEventListener('input', (e) => {
                 elements.distVal.innerText = e.target.value;
                 config.distLimit = parseFloat(e.target.value); 
+                saveSettings();
                 drawRadar(); 
             });
+
+            // Persist field/checkbox changes immediately
+            [
+                elements.dumpIp,
+                elements.myLat,
+                elements.myLon,
+                elements.camAz
+            ].forEach((field) => field.addEventListener('change', saveSettings));
+
+            [
+                elements.autoSnap,
+                elements.snapClearOnly
+            ].forEach((box) => box.addEventListener('change', saveSettings));
 
             // Initial draw of the empty radar
             drawRadar();
@@ -281,6 +302,7 @@
         function togglePlaneList() {
             config.showRadarOnly = !config.showRadarOnly;
             elements.btnToggleList.innerText = config.showRadarOnly ? "Show: Radar Only" : "Show: All";
+            saveSettings();
             renderPlaneList();
         }
 
@@ -377,39 +399,64 @@
         }
 
         function loadSettings() {
+            // Preferred settings blob (new format)
+            const savedConfigRaw = localStorage.getItem('skywatcher_settings');
+            if (savedConfigRaw) {
+                try {
+                    const savedConfig = JSON.parse(savedConfigRaw);
+                    config = { ...config, ...savedConfig };
+                } catch (err) {
+                    console.warn('Could not parse saved settings blob:', err);
+                }
+            }
+
+            // Backward compatibility with older individual keys
             const savedLat = localStorage.getItem('skywatcher_lat');
             const savedLon = localStorage.getItem('skywatcher_lon');
             const savedIp = localStorage.getItem('skywatcher_ip');
             const savedAz = localStorage.getItem('skywatcher_az');
             const savedClear = localStorage.getItem('skywatcher_clear');
-            
-            if (savedLat) {
-                document.getElementById('my-lat').value = savedLat;
-                config.lat = parseFloat(savedLat);
-            }
-            if (savedLon) {
-                document.getElementById('my-lon').value = savedLon;
-                config.lon = parseFloat(savedLon);
-            }
-            if (savedIp) document.getElementById('dump-ip').value = savedIp;
-            if (savedAz) document.getElementById('cam-az').value = savedAz;
             const savedMapOverlay = localStorage.getItem('skywatcher_map_overlay');
-            if (savedMapOverlay !== null) {
-                config.mapOverlay = savedMapOverlay === 'true';
-                if (elements.mapOverlay) elements.mapOverlay.checked = config.mapOverlay;
-            }
-            
-            if (savedClear !== null) document.getElementById('snap-clear-only').checked = savedClear === 'true';
+
+            if (savedLat && !savedConfigRaw) config.lat = parseFloat(savedLat);
+            if (savedLon && !savedConfigRaw) config.lon = parseFloat(savedLon);
+            if (savedIp && !savedConfigRaw) config.ip = savedIp;
+            if (savedAz && !savedConfigRaw) config.camAzimuth = parseFloat(savedAz);
+            if (savedClear !== null && !savedConfigRaw) config.snapClearOnly = savedClear === 'true';
+            if (savedMapOverlay !== null && !savedConfigRaw) config.mapOverlay = savedMapOverlay === 'true';
+
+            // Apply loaded settings to UI controls
+            elements.myLat.value = config.lat || '';
+            elements.myLon.value = config.lon || '';
+            elements.dumpIp.value = config.ip || '';
+            elements.camAz.value = config.camAzimuth;
+            elements.distSlider.value = config.distLimit;
+            elements.distVal.innerText = String(config.distLimit);
+            elements.autoSnap.checked = config.autoSnap;
+            elements.snapClearOnly.checked = config.snapClearOnly;
+            elements.mapOverlay.checked = config.mapOverlay;
+            elements.btnToggleList.innerText = config.showRadarOnly ? "Show: Radar Only" : "Show: All";
         }
 
         function saveSettings() {
-            localStorage.setItem('skywatcher_lat', document.getElementById('my-lat').value);
-            localStorage.setItem('skywatcher_lon', document.getElementById('my-lon').value);
-            localStorage.setItem('skywatcher_ip', document.getElementById('dump-ip').value);
-            localStorage.setItem('skywatcher_az', document.getElementById('cam-az').value);
-            localStorage.setItem('skywatcher_clear', document.getElementById('snap-clear-only').checked);
+            config.ip = elements.dumpIp.value;
+            config.lat = parseFloat(elements.myLat.value) || 0;
+            config.lon = parseFloat(elements.myLon.value) || 0;
+            config.camAzimuth = parseFloat(elements.camAz.value) || 90;
+            config.distLimit = parseFloat(elements.distSlider.value) || 10;
+            config.autoSnap = elements.autoSnap.checked;
+            config.snapClearOnly = elements.snapClearOnly.checked;
+            config.mapOverlay = elements.mapOverlay.checked;
+
+            localStorage.setItem('skywatcher_settings', JSON.stringify(config));
+
+            // Keep legacy keys so existing users are still covered if they downgrade
+            localStorage.setItem('skywatcher_lat', elements.myLat.value);
+            localStorage.setItem('skywatcher_lon', elements.myLon.value);
+            localStorage.setItem('skywatcher_ip', elements.dumpIp.value);
+            localStorage.setItem('skywatcher_az', elements.camAz.value);
+            localStorage.setItem('skywatcher_clear', elements.snapClearOnly.checked);
             localStorage.setItem('skywatcher_map_overlay', config.mapOverlay);
-            addLog("Configuration saved to browser storage.");
         }
 
         // --- Weather Logic (Open-Meteo) ---
