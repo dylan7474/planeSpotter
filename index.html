@@ -93,7 +93,6 @@
                     <div class="flex gap-2">
                         <div id="weather-status" class="px-2 py-1 rounded-full text-[10px] bg-slate-700 text-slate-400 hidden sm:block">Weather: Standby</div>
                         <div id="data-status" class="px-2 py-1 rounded-full text-[10px] bg-slate-700 text-slate-400">Data: Standby</div>
-                        <div id="lookup-status" class="px-2 py-1 rounded-full text-[10px] bg-slate-700 text-slate-400">Lookup: Standby</div>
                     </div>
                 </div>
                 <div class="flex justify-center w-full pt-2">
@@ -251,7 +250,6 @@
             distVal: document.getElementById('dist-val'),
             radar: document.getElementById('radar-canvas'),
             weatherStatus: document.getElementById('weather-status'),
-            lookupStatus: document.getElementById('lookup-status'),
             btnToggleList: document.getElementById('btn-toggle-list'),
             mapOverlay: document.getElementById('map-overlay'),
             mapStyle: document.getElementById('map-style'),
@@ -388,10 +386,7 @@
         let monitorTimer = null;
         let weatherTimer = null;
         let isDataConnected = null;
-        let isLookupConnected = null;
         const FETCH_TIMEOUT_MS = 12000;
-        let lastAdsbErrorSignature = '';
-        let lastAdsbErrorLoggedAt = 0;
 
         function toggleMonitoring() {
             if (monitorTimer) {
@@ -557,7 +552,6 @@
             if (config.dataSource === 'adsb_lol') {
                 if (!config.lat || !config.lon) {
                     updateDataStatus(false, "Set your Lat/Lon first for ADSB.lol");
-                    updateLookupStatus(false, "Set Lat/Lon");
                     return;
                 }
                 sourceName = 'ADSB.lol';
@@ -572,21 +566,11 @@
                     ? data.aircraft
                     : (Array.isArray(data.ac) ? data.ac : []);
 
-                if (config.dataSource === 'adsb_lol') {
-                    updateLookupStatus(true, "Lookup + live data");
-                } else {
-                    aircraft = await enrichFromAdsbLookup(aircraft);
-                }
-
                 updateDataStatus(true, '', sourceName);
                 processPlanes(aircraft);
             } catch (err) {
                 const diagnostic = describeFetchError(err, sourceName, url);
                 updateDataStatus(false, diagnostic.shortMessage, sourceName);
-                if (config.dataSource === 'adsb_lol') {
-                    updateLookupStatus(false, diagnostic.shortMessage);
-                    logAdsbFailure(diagnostic);
-                }
             }
         }
 
@@ -607,36 +591,6 @@
                     elements.planeList.innerHTML = '<p class="text-slate-500 text-sm italic">Connection lost...</p>';
                 }
                 isDataConnected = false;
-            }
-        }
-
-        async function enrichFromAdsbLookup(aircraft) {
-            if (!config.lat || !config.lon) {
-                updateLookupStatus(false, "Set Lat/Lon for lookup");
-                return aircraft;
-            }
-
-            const lookupUrl = `https://api.adsb.lol/v2/lat/${config.lat}/lon/${config.lon}/dist/${config.adsbRangeNm}`;
-
-            try {
-                const payload = await fetchJsonWithDiagnostics(lookupUrl, 'Lookup API');
-                const lookupAircraft = Array.isArray(payload.aircraft)
-                    ? payload.aircraft
-                    : (Array.isArray(payload.ac) ? payload.ac : []);
-
-                const byHex = new Map();
-                lookupAircraft.forEach((entry) => {
-                    const key = normalizeHex(entry.hex);
-                    if (key) byHex.set(key, entry);
-                });
-
-                const enriched = aircraft.map((plane) => mergePlaneLookup(plane, byHex.get(normalizeHex(plane.hex))));
-                updateLookupStatus(true, `Lookup ok (${lookupAircraft.length} aircraft)`);
-                return enriched;
-            } catch (err) {
-                const diagnostic = describeFetchError(err, 'Lookup API', lookupUrl);
-                updateLookupStatus(false, diagnostic.shortMessage);
-                return aircraft;
             }
         }
 
@@ -674,62 +628,6 @@
                 shortMessage,
                 fullMessage: `${sourceLabel} error: ${shortMessage} | URL: ${url}`
             };
-        }
-
-        function logAdsbFailure(diagnostic) {
-            const now = Date.now();
-            const signature = diagnostic.fullMessage;
-            const shouldLog = signature !== lastAdsbErrorSignature || (now - lastAdsbErrorLoggedAt) > 30000;
-            if (!shouldLog) return;
-
-            addLog(diagnostic.fullMessage);
-            lastAdsbErrorSignature = signature;
-            lastAdsbErrorLoggedAt = now;
-        }
-
-        function normalizeHex(value) {
-            if (!value || typeof value !== 'string') return '';
-            return value.trim().toLowerCase();
-        }
-
-        function firstDefined(...values) {
-            for (const value of values) {
-                if (value !== undefined && value !== null && String(value).trim() !== '') {
-                    return value;
-                }
-            }
-            return null;
-        }
-
-        function mergePlaneLookup(basePlane, lookupPlane) {
-            if (!lookupPlane) return basePlane;
-            return {
-                ...basePlane,
-                flight: firstDefined(basePlane.flight, lookupPlane.flight, lookupPlane.callsign),
-                r: firstDefined(basePlane.r, lookupPlane.r, lookupPlane.reg, lookupPlane.registration),
-                t: firstDefined(basePlane.t, lookupPlane.t, lookupPlane.type, lookupPlane.aircraft_type),
-                desc: firstDefined(basePlane.desc, lookupPlane.desc, lookupPlane.aircraft),
-                ownOp: firstDefined(basePlane.ownOp, lookupPlane.ownOp, lookupPlane.operator)
-            };
-        }
-
-        function updateLookupStatus(connected, detail = "") {
-            const el = elements.lookupStatus;
-            if (connected) {
-                el.innerText = "Lookup: Online";
-                el.className = "px-2 py-1 rounded-full text-[10px] bg-emerald-900 text-emerald-200";
-                if (isLookupConnected !== true) {
-                    addLog(`Lookup API online${detail ? ` (${detail})` : ''}.`);
-                }
-                isLookupConnected = true;
-            } else {
-                el.innerText = "Lookup: Offline";
-                el.className = "px-2 py-1 rounded-full text-[10px] bg-red-900 text-red-200";
-                if (isLookupConnected !== false) {
-                    addLog(`Lookup API issue${detail ? ` (${detail})` : ''}.`);
-                }
-                isLookupConnected = false;
-            }
         }
 
         function processPlanes(aircraft) {
@@ -1234,7 +1132,7 @@
             const type = plane.t ? String(plane.t).toUpperCase() : null;
             const op = plane.ownOp || null;
             const desc = plane.desc || null;
-            return [reg, type, op, desc].filter(Boolean).join(' • ') || 'No lookup details yet';
+            return [reg, type, op, desc].filter(Boolean).join(' • ') || 'No extra aircraft details';
         }
 
         function isPlaneInView(p) {
