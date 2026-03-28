@@ -153,6 +153,10 @@
                             <input type="checkbox" id="snap-clear-only" checked>
                             <label for="snap-clear-only" class="text-xs text-slate-400">Clear skies only</label>
                         </div>
+                        <div class="flex items-center gap-2">
+                            <input type="checkbox" id="map-overlay" checked>
+                            <label for="map-overlay" class="text-xs text-slate-400">Map overlay</label>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -204,7 +208,8 @@
             pollInterval: 1000,
             autoSnap: true,
             snapClearOnly: true,
-            showRadarOnly: false
+            showRadarOnly: false,
+            mapOverlay: true
         };
 
         const elements = {
@@ -222,7 +227,8 @@
             distVal: document.getElementById('dist-val'),
             radar: document.getElementById('radar-canvas'),
             weatherStatus: document.getElementById('weather-status'),
-            btnToggleList: document.getElementById('btn-toggle-list')
+            btnToggleList: document.getElementById('btn-toggle-list'),
+            mapOverlay: document.getElementById('map-overlay')
         };
 
         let activePlanes = [];
@@ -241,6 +247,10 @@
             document.getElementById('btn-clear-gallery').onclick = () => elements.gallery.innerHTML = '';
             elements.btnToggleCam.onclick = toggleCameraPreview;
             elements.btnToggleList.onclick = togglePlaneList;
+            elements.mapOverlay.addEventListener('change', (e) => {
+                config.mapOverlay = e.target.checked;
+                drawRadar();
+            });
 
             // Proximity slider listener
             elements.distSlider.addEventListener('input', (e) => {
@@ -358,6 +368,7 @@
             config.distLimit = parseFloat(elements.distSlider.value);
             config.autoSnap = document.getElementById('auto-snap').checked;
             config.snapClearOnly = document.getElementById('snap-clear-only').checked;
+            config.mapOverlay = document.getElementById('map-overlay').checked;
             saveSettings();
         }
 
@@ -378,6 +389,11 @@
             }
             if (savedIp) document.getElementById('dump-ip').value = savedIp;
             if (savedAz) document.getElementById('cam-az').value = savedAz;
+            const savedMapOverlay = localStorage.getItem('skywatcher_map_overlay');
+            if (savedMapOverlay !== null) {
+                config.mapOverlay = savedMapOverlay === 'true';
+                if (elements.mapOverlay) elements.mapOverlay.checked = config.mapOverlay;
+            }
             
             if (savedClear !== null) document.getElementById('snap-clear-only').checked = savedClear === 'true';
         }
@@ -388,6 +404,7 @@
             localStorage.setItem('skywatcher_ip', document.getElementById('dump-ip').value);
             localStorage.setItem('skywatcher_az', document.getElementById('cam-az').value);
             localStorage.setItem('skywatcher_clear', document.getElementById('snap-clear-only').checked);
+            localStorage.setItem('skywatcher_map_overlay', config.mapOverlay);
             addLog("Configuration saved to browser storage.");
         }
 
@@ -494,6 +511,12 @@
             const gridBright = 'rgba(255, 180, 50, 0.9)';
             const fovColor = 'rgba(59, 130, 246, 0.15)';
             const fovEdge = 'rgba(59, 130, 246, 0.6)';
+            const radarMaxDistNM = 30;
+
+            // Optional map overlay (lat/lon reference grid and center marker)
+            if (config.mapOverlay) {
+                drawMapOverlay(ctx, cx, cy, maxR, tilt, radarMaxDistNM);
+            }
 
             // --- 1. Draw Flat 3D Grid & Plane ---
             ctx.save();
@@ -571,7 +594,6 @@
             ctx.shadowBlur = 0;
 
             // --- 3. Calculate & Sort Planes (Back-to-Front Depth Sorting) ---
-            const radarMaxDistNM = 30; 
             let renderItems = [];
 
             activePlanes.forEach(p => {
@@ -681,6 +703,61 @@
                 ctx.font = "bold 13px monospace";
                 ctx.fillText(p.flight ? p.flight.trim() : p.hex, px + 12, py + 5);
             });
+        }
+
+        function drawMapOverlay(ctx, cx, cy, maxR, tilt, radarMaxDistNM) {
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.scale(1, tilt);
+
+            // Clip map overlay to radar disc
+            ctx.beginPath();
+            ctx.arc(0, 0, maxR, 0, Math.PI * 2);
+            ctx.clip();
+
+            // Subtle map tint so the area stands out
+            ctx.fillStyle = 'rgba(22, 78, 99, 0.16)';
+            ctx.fillRect(-maxR, -maxR, maxR * 2, maxR * 2);
+
+            const gridLines = 6;
+            ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+            ctx.lineWidth = 1;
+            for (let i = -gridLines; i <= gridLines; i++) {
+                const ratio = i / gridLines;
+                const x = ratio * maxR;
+                const y = ratio * maxR;
+                ctx.beginPath();
+                ctx.moveTo(x, -maxR);
+                ctx.lineTo(x, maxR);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(-maxR, y);
+                ctx.lineTo(maxR, y);
+                ctx.stroke();
+            }
+
+            // Cardinal markers
+            ctx.fillStyle = 'rgba(186, 230, 253, 0.7)';
+            ctx.font = 'bold 14px sans-serif';
+            ctx.fillText('N', -6, -maxR + 20);
+            ctx.fillText('S', -5, maxR - 8);
+            ctx.fillText('W', -maxR + 8, 5);
+            ctx.fillText('E', maxR - 18, 5);
+
+            ctx.restore();
+
+            // Center coordinate label (outside tilt transform so text stays crisp)
+            if (config.lat && config.lon) {
+                ctx.fillStyle = 'rgba(148, 163, 184, 0.9)';
+                ctx.font = '11px monospace';
+                const label = `${formatCoord(config.lat, 'lat')} ${formatCoord(config.lon, 'lon')} (±${radarMaxDistNM}NM)`;
+                ctx.fillText(label, cx - maxR + 8, cy + maxR * tilt + 18);
+            }
+        }
+
+        function formatCoord(value, kind) {
+            const dir = kind === 'lat' ? (value >= 0 ? 'N' : 'S') : (value >= 0 ? 'E' : 'W');
+            return `${Math.abs(value).toFixed(3)}°${dir}`;
         }
 
         function calculateRelative(pLat, pLon, pAltFeet) {
