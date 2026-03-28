@@ -235,6 +235,10 @@
         let capturedHex = new Set(); // Prevent spamming same plane
         let stream = null;
         let currentWeatherCode = -1; // -1: Unknown, 0-2: Clear/Partly Cloudy, 3+: Cloudy/Poor
+        const mapTileState = {
+            cache: new Map(),
+            pending: new Set()
+        };
         
         // --- Initialization ---
 
@@ -715,12 +719,26 @@
             ctx.arc(0, 0, maxR, 0, Math.PI * 2);
             ctx.clip();
 
-            // Subtle map tint so the area stands out
-            ctx.fillStyle = 'rgba(22, 78, 99, 0.16)';
+            const mapFrame = getMapFrame(config.lat, config.lon, radarMaxDistNM);
+
+            // Ocean-like fallback tone behind tiles
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
             ctx.fillRect(-maxR, -maxR, maxR * 2, maxR * 2);
 
+            if (mapFrame.canvas) {
+                ctx.globalAlpha = 0.6;
+                ctx.imageSmoothingEnabled = true;
+                ctx.drawImage(mapFrame.canvas, -maxR, -maxR, maxR * 2, maxR * 2);
+                ctx.globalAlpha = 1;
+            } else {
+                // Lightweight fallback if tiles haven't loaded yet
+                ctx.fillStyle = 'rgba(22, 78, 99, 0.16)';
+                ctx.fillRect(-maxR, -maxR, maxR * 2, maxR * 2);
+            }
+
+            // Subtle range grid over map to preserve radar readability
             const gridLines = 6;
-            ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+            ctx.strokeStyle = 'rgba(148, 163, 184, 0.18)';
             ctx.lineWidth = 1;
             for (let i = -gridLines; i <= gridLines; i++) {
                 const ratio = i / gridLines;
@@ -752,7 +770,86 @@
                 ctx.font = '11px monospace';
                 const label = `${formatCoord(config.lat, 'lat')} ${formatCoord(config.lon, 'lon')} (±${radarMaxDistNM}NM)`;
                 ctx.fillText(label, cx - maxR + 8, cy + maxR * tilt + 18);
+                ctx.fillStyle = 'rgba(148, 163, 184, 0.7)';
+                ctx.font = '10px monospace';
+                ctx.fillText('Map tiles © OpenStreetMap contributors', cx - maxR + 8, cy + maxR * tilt + 32);
             }
+        }
+
+        function getMapFrame(lat, lon, radarMaxDistNM) {
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { canvas: null };
+
+            const targetPx = 640;
+            const lonScale = Math.cos(lat * Math.PI / 180) || 1;
+            const lonDelta = radarMaxDistNM / (60 * Math.max(0.2, Math.abs(lonScale)));
+            const widthDeg = Math.max(0.05, lonDelta * 2);
+            const zoomEstimate = Math.round(Math.log2((360 * targetPx) / (widthDeg * 256)));
+            const zoom = Math.min(14, Math.max(6, zoomEstimate));
+            const worldTiles = 2 ** zoom;
+
+            const xCenter = ((lon + 180) / 360) * worldTiles;
+            const safeLat = Math.max(-85.0511, Math.min(85.0511, lat));
+            const latRad = safeLat * Math.PI / 180;
+            const yCenter = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * worldTiles;
+
+            const tilesAcross = Math.ceil(targetPx / 256) + 2;
+            const xStart = Math.floor(xCenter - tilesAcross / 2);
+            const yStart = Math.floor(yCenter - tilesAcross / 2);
+
+            const canvas = document.createElement('canvas');
+            canvas.width = targetPx;
+            canvas.height = targetPx;
+            const mapCtx = canvas.getContext('2d');
+
+            mapCtx.fillStyle = '#0f172a';
+            mapCtx.fillRect(0, 0, targetPx, targetPx);
+
+            let loadedTileCount = 0;
+            const pixelOriginX = (xCenter - tilesAcross / 2) * 256;
+            const pixelOriginY = (yCenter - tilesAcross / 2) * 256;
+
+            for (let yi = 0; yi < tilesAcross; yi++) {
+                const tileY = yStart + yi;
+                if (tileY < 0 || tileY >= worldTiles) continue;
+
+                for (let xi = 0; xi < tilesAcross; xi++) {
+                    const tileX = ((xStart + xi) % worldTiles + worldTiles) % worldTiles;
+                    const tileKey = `${zoom}/${tileX}/${tileY}`;
+                    const tileImg = getOrQueueTile(tileKey);
+
+                    if (!tileImg || !tileImg.complete || tileImg.naturalWidth === 0) continue;
+
+                    loadedTileCount++;
+                    const dx = (tileX * 256) - pixelOriginX;
+                    const dy = (tileY * 256) - pixelOriginY;
+                    mapCtx.drawImage(tileImg, dx, dy, 256, 256);
+                }
+            }
+
+            return {
+                canvas: loadedTileCount > 0 ? canvas : null
+            };
+        }
+
+        function getOrQueueTile(tileKey) {
+            if (mapTileState.cache.has(tileKey)) {
+                return mapTileState.cache.get(tileKey);
+            }
+            if (mapTileState.pending.has(tileKey)) return null;
+
+            mapTileState.pending.add(tileKey);
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                mapTileState.cache.set(tileKey, img);
+                mapTileState.pending.delete(tileKey);
+                drawRadar();
+            };
+            img.onerror = () => {
+                mapTileState.pending.delete(tileKey);
+            };
+            img.src = `https://tile.openstreetmap.org/${tileKey}.png`;
+            return null;
         }
 
         function formatCoord(value, kind) {
