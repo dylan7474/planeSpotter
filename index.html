@@ -18,7 +18,7 @@
         #camera-feed {
             width: 100%;
             height: auto;
-            transform: scaleX(1); /* Set to -1 if you want mirrored, but for sky usually 1 */
+            transform: scaleX(1);
         }
         .overlay {
             position: absolute;
@@ -133,11 +133,17 @@
                     <div class="flex flex-col gap-1 justify-center ml-2">
                         <div class="flex items-center gap-2">
                             <input type="checkbox" id="auto-snap" checked>
-                            <label for="auto-snap" class="text-sm">Auto-Snap</label>
+                            <label for="auto-snap" class="text-xs text-slate-200">Auto-Snap</label>
                         </div>
                         <div class="flex items-center gap-2">
                             <input type="checkbox" id="snap-clear-only" checked>
                             <label for="snap-clear-only" class="text-xs text-slate-400">Clear skies only</label>
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-1 justify-center ml-2 border-l border-slate-600 pl-4">
+                        <div class="flex items-center gap-2">
+                            <input type="checkbox" id="show-topo" checked>
+                            <label for="show-topo" class="text-xs text-slate-400">Terrain Grid</label>
                         </div>
                     </div>
                 </div>
@@ -204,7 +210,8 @@
             pollInterval: 1000,
             autoSnap: true,
             snapClearOnly: true,
-            showRadarOnly: false
+            showRadarOnly: false,
+            showTopo: true
         };
 
         const elements = {
@@ -222,13 +229,19 @@
             distVal: document.getElementById('dist-val'),
             radar: document.getElementById('radar-canvas'),
             weatherStatus: document.getElementById('weather-status'),
-            btnToggleList: document.getElementById('btn-toggle-list')
+            btnToggleList: document.getElementById('btn-toggle-list'),
+            chkShowTopo: document.getElementById('show-topo')
         };
 
         let activePlanes = [];
         let capturedHex = new Set(); // Prevent spamming same plane
         let stream = null;
         let currentWeatherCode = -1; // -1: Unknown, 0-2: Clear/Partly Cloudy, 3+: Cloudy/Poor
+        
+        // Topography Grid Cache
+        let topoGrid = null;
+        let lastFetchedLat = 0;
+        let lastFetchedLon = 0;
 
         // --- Initialization ---
 
@@ -242,12 +255,24 @@
             elements.btnToggleCam.onclick = toggleCameraPreview;
             elements.btnToggleList.onclick = togglePlaneList;
             
+            // Checkbox listeners
+            elements.chkShowTopo.addEventListener('change', (e) => {
+                config.showTopo = e.target.checked;
+                saveSettings();
+                drawRadar();
+            });
+
             // Proximity slider listener
             elements.distSlider.addEventListener('input', (e) => {
                 elements.distVal.innerText = e.target.value;
-                config.distLimit = parseFloat(e.target.value); // Real-time update
-                drawRadar(); // Force redraw when slider moves
+                config.distLimit = parseFloat(e.target.value); 
+                drawRadar(); 
             });
+
+            // Fetch topo immediately if coordinates were loaded from cache
+            if (config.lat !== 0 && config.lon !== 0) {
+                fetchTopography();
+            }
 
             // Initial draw of the empty radar
             drawRadar();
@@ -271,7 +296,6 @@
         }
 
         async function setupCamera() {
-            // Check for Secure Context / browser support
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 const msg = window.isSecureContext === false 
                     ? "Camera blocked. You must access this page via http://localhost or https:// to use the webcam."
@@ -301,7 +325,6 @@
                 }
                 showCameraError(msg);
                 
-                // If there's an error, force show the camera container so the user sees the error message visually
                 elements.camContainer.classList.remove('hidden');
                 elements.btnToggleCam.innerText = 'Hide Camera';
             }
@@ -337,7 +360,7 @@
                 fetchWeather();
                 fetchData();
 
-                // Set intervals (Data = 1s, Weather = 15m)
+                // Set intervals
                 monitorTimer = setInterval(fetchData, config.pollInterval);
                 weatherTimer = setInterval(fetchWeather, 900000); 
 
@@ -349,13 +372,22 @@
         }
 
         function updateConfig() {
+            const newLat = parseFloat(document.getElementById('my-lat').value) || 0;
+            const newLon = parseFloat(document.getElementById('my-lon').value) || 0;
+            
+            // If location changed, refresh topography
+            if (newLat !== config.lat || newLon !== config.lon) {
+                config.lat = newLat;
+                config.lon = newLon;
+                fetchTopography();
+            }
+
             config.ip = document.getElementById('dump-ip').value;
-            config.lat = parseFloat(document.getElementById('my-lat').value) || 0;
-            config.lon = parseFloat(document.getElementById('my-lon').value) || 0;
             config.camAzimuth = parseFloat(document.getElementById('cam-az').value) || 90;
             config.distLimit = parseFloat(elements.distSlider.value);
             config.autoSnap = document.getElementById('auto-snap').checked;
             config.snapClearOnly = document.getElementById('snap-clear-only').checked;
+            config.showTopo = elements.chkShowTopo.checked;
             saveSettings();
         }
 
@@ -365,12 +397,24 @@
             const savedIp = localStorage.getItem('skywatcher_ip');
             const savedAz = localStorage.getItem('skywatcher_az');
             const savedClear = localStorage.getItem('skywatcher_clear');
+            const savedTopo = localStorage.getItem('skywatcher_topo');
             
-            if (savedLat) document.getElementById('my-lat').value = savedLat;
-            if (savedLon) document.getElementById('my-lon').value = savedLon;
+            if (savedLat) {
+                document.getElementById('my-lat').value = savedLat;
+                config.lat = parseFloat(savedLat);
+            }
+            if (savedLon) {
+                document.getElementById('my-lon').value = savedLon;
+                config.lon = parseFloat(savedLon);
+            }
             if (savedIp) document.getElementById('dump-ip').value = savedIp;
             if (savedAz) document.getElementById('cam-az').value = savedAz;
+            
             if (savedClear !== null) document.getElementById('snap-clear-only').checked = savedClear === 'true';
+            if (savedTopo !== null) {
+                config.showTopo = savedTopo === 'true';
+                elements.chkShowTopo.checked = config.showTopo;
+            }
         }
 
         function saveSettings() {
@@ -379,7 +423,69 @@
             localStorage.setItem('skywatcher_ip', document.getElementById('dump-ip').value);
             localStorage.setItem('skywatcher_az', document.getElementById('cam-az').value);
             localStorage.setItem('skywatcher_clear', document.getElementById('snap-clear-only').checked);
+            localStorage.setItem('skywatcher_topo', elements.chkShowTopo.checked);
             addLog("Configuration saved to browser storage.");
+        }
+
+        // --- Topography Logic (Open-Meteo) ---
+        async function fetchTopography() {
+            if (!config.lat || !config.lon) return;
+            if (lastFetchedLat === config.lat && lastFetchedLon === config.lon && topoGrid) return;
+            
+            lastFetchedLat = config.lat;
+            lastFetchedLon = config.lon;
+
+            // Open-Meteo allows max 100 points per request. We'll build a 10x10 grid.
+            const gridSize = 10; 
+            const radiusNM = 30; // Scan covers 30 NM radius
+            
+            // Approximate degree conversions
+            const radiusDegLat = radiusNM / 60;
+            const radiusDegLon = radiusNM / (60 * Math.cos(config.lat * Math.PI / 180));
+            
+            let lats = [];
+            let lons = [];
+            let localPoints = [];
+            
+            addLog("Calculating regional terrain matrix...");
+
+            for (let i = 0; i < gridSize; i++) {
+                for (let j = 0; j < gridSize; j++) {
+                    // Map j,i to normalized space -1.0 to 1.0 (X, Y)
+                    const nx = (j / (gridSize - 1)) * 2 - 1; 
+                    const ny = (1 - (i / (gridSize - 1))) * 2 - 1; 
+                    
+                    const lat = config.lat + ny * radiusDegLat;
+                    const lon = config.lon + nx * radiusDegLon;
+                    
+                    lats.push(lat.toFixed(4));
+                    lons.push(lon.toFixed(4));
+                    localPoints.push({ nx, ny });
+                }
+            }
+            
+            try {
+                const url = `https://api.open-meteo.com/v1/elevation?latitude=${lats.join(',')}&longitude=${lons.join(',')}`;
+                const res = await fetch(url);
+                if (!res.ok) throw new Error("Topo fetch failed");
+                const data = await res.json();
+                
+                if (data.elevation) {
+                    topoGrid = {
+                        size: gridSize,
+                        points: localPoints.map((p, idx) => ({
+                            ...p,
+                            elev: data.elevation[idx] || 0
+                        }))
+                    };
+                    addLog("Terrain topography loaded (100 sectors).");
+                    drawRadar(); // Redraw with topography
+                }
+            } catch (e) {
+                console.error("Topography Error:", e);
+                addLog("Topography fetch failed.");
+                topoGrid = null;
+            }
         }
 
         // --- Weather Logic (Open-Meteo) ---
@@ -404,10 +510,6 @@
         }
 
         function updateWeatherUI(code) {
-            // WMO Weather interpretation codes:
-            // 0: Clear sky, 1: Mainly clear, 2: Partly cloudy, 3: Overcast
-            // 45+: Fog, rain, snow, storms, etc.
-            
             if (code === 0 || code === 1) {
                 elements.weatherStatus.innerText = "Weather: Clear";
                 elements.weatherStatus.className = "px-2 py-1 rounded-full text-[10px] bg-blue-900 text-blue-200 hidden sm:block";
@@ -490,7 +592,7 @@
             const fovColor = 'rgba(59, 130, 246, 0.15)';
             const fovEdge = 'rgba(59, 130, 246, 0.6)';
 
-            // --- 1. Draw 3D Grid & Plane ---
+            // --- 1. Draw Flat 3D Grid & Plane ---
             ctx.save();
             ctx.translate(cx, cy);
             ctx.scale(1, tilt);
@@ -552,7 +654,64 @@
 
             ctx.restore();
 
-            // --- 2. Draw Player Ship (Center Chevron) ---
+            // --- 2. Draw Topography Holographic Mesh ---
+            if (config.showTopo && topoGrid) {
+                ctx.save();
+                ctx.translate(cx, cy);
+                
+                ctx.strokeStyle = 'rgba(255, 160, 0, 0.45)'; // Subtle glowing topo lines
+                ctx.lineWidth = 1.5;
+                
+                const s = topoGrid.size;
+                const pts = topoGrid.points;
+                
+                // Maps grid coord to screen point
+                const getPt = (r, c) => {
+                    const p = pts[r * s + c];
+                    const elev_ft = Math.max(0, p.elev) * 3.28084; // Ensure min is sea level
+                    // Scale terrain up 4x so it is visibly cool on the 40,000ft radar stalk scale
+                    const terrain_h = (elev_ft / 40000) * 220 * 4.0; 
+                    const px = p.nx * maxR;
+                    const py = -p.ny * maxR; // -y goes North/Up
+                    return { x: px, y: py * tilt - terrain_h, dist: Math.sqrt(p.nx*p.nx + p.ny*p.ny) };
+                };
+
+                // Draw X lines (Rows)
+                for(let r=0; r<s; r++) {
+                    ctx.beginPath();
+                    let hasPoints = false;
+                    for(let c=0; c<s; c++) {
+                        const pt = getPt(r, c);
+                        if (pt.dist <= 1.0) { // Keep within the circular radar boundary
+                            if (!hasPoints) { ctx.moveTo(pt.x, pt.y); hasPoints = true; }
+                            else { ctx.lineTo(pt.x, pt.y); }
+                        } else {
+                            hasPoints = false;
+                        }
+                    }
+                    ctx.stroke();
+                }
+                
+                // Draw Y lines (Cols)
+                for(let c=0; c<s; c++) {
+                    ctx.beginPath();
+                    let hasPoints = false;
+                    for(let r=0; r<s; r++) {
+                        const pt = getPt(r, c);
+                        if (pt.dist <= 1.0) {
+                            if (!hasPoints) { ctx.moveTo(pt.x, pt.y); hasPoints = true; }
+                            else { ctx.lineTo(pt.x, pt.y); }
+                        } else {
+                            hasPoints = false;
+                        }
+                    }
+                    ctx.stroke();
+                }
+                
+                ctx.restore();
+            }
+
+            // --- 3. Draw Player Ship (Center Chevron) ---
             ctx.shadowBlur = 20;
             ctx.shadowColor = gridBright;
             ctx.fillStyle = gridBright;
@@ -565,7 +724,7 @@
             ctx.fill();
             ctx.shadowBlur = 0;
 
-            // --- 3. Calculate & Sort Planes (Back-to-Front Depth Sorting) ---
+            // --- 4. Calculate & Sort Planes (Back-to-Front Depth Sorting) ---
             const radarMaxDistNM = 30; 
             let renderItems = [];
 
@@ -596,7 +755,7 @@
             // Sort so planes further "back" on the grid are drawn first
             renderItems.sort((a, b) => a.depth - b.depth);
 
-            // --- 4. Render Planes (Holographic Style) ---
+            // --- 5. Render Planes (Holographic Style) ---
 
             renderItems.forEach(item => {
                 const { plane: p, bx, by, px, py, inView } = item;
