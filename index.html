@@ -68,10 +68,15 @@
                 <div id="status-tag" class="px-3 py-1 rounded-full text-xs bg-red-900 text-red-200">Disconnected</div>
             </header>
 
-            <div class="video-container shadow-2xl">
+            <div class="video-container shadow-2xl relative min-h-[300px] flex items-center justify-center">
                 <video id="camera-feed" autoplay playsinline></video>
                 <canvas id="overlay-canvas" class="overlay"></canvas>
                 <div id="capture-flash" class="absolute inset-0 bg-white opacity-0 pointer-events-none transition-opacity duration-100"></div>
+                <div id="camera-error" class="absolute inset-0 bg-slate-800/90 flex flex-col items-center justify-center text-center p-6 hidden">
+                    <svg class="w-12 h-12 text-red-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                    <h2 class="text-xl font-bold text-red-400 mb-2">Camera Access Blocked</h2>
+                    <p id="camera-error-msg" class="text-sm text-slate-300">Please check your permissions.</p>
+                </div>
             </div>
 
             <div class="bg-slate-800 p-4 rounded-xl space-y-4">
@@ -157,7 +162,9 @@
             log: document.getElementById('log'),
             status: document.getElementById('status-tag'),
             gallery: document.getElementById('gallery'),
-            flash: document.getElementById('capture-flash')
+            flash: document.getElementById('capture-flash'),
+            camError: document.getElementById('camera-error'),
+            camErrorMsg: document.getElementById('camera-error-msg')
         };
 
         let activePlanes = [];
@@ -175,6 +182,16 @@
         };
 
         async function setupCamera() {
+            // Check for Secure Context / browser support
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                const msg = window.isSecureContext === false 
+                    ? "Camera blocked. You must access this page via http://localhost or https:// to use the webcam."
+                    : "Your browser does not support webcam access.";
+                
+                showCameraError(msg);
+                return;
+            }
+
             try {
                 stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { 
@@ -184,11 +201,24 @@
                     } 
                 });
                 elements.video.srcObject = stream;
-                addLog("Camera initialized.");
+                elements.camError.classList.add('hidden');
+                addLog("Camera initialized successfully.");
             } catch (err) {
-                addLog("Camera error: " + err.message);
-                console.error(err);
+                let msg = "Camera error: " + err.message;
+                if (err.name === "NotAllowedError") {
+                    msg = "Camera permission denied by user.";
+                } else if (err.name === "NotFoundError") {
+                    msg = "No camera found on this device.";
+                }
+                showCameraError(msg);
             }
+        }
+
+        function showCameraError(msg) {
+            elements.camErrorMsg.innerText = msg;
+            elements.camError.classList.remove('hidden');
+            addLog(msg);
+            console.error(msg);
         }
 
         // --- Core Logic ---
@@ -223,8 +253,6 @@
         }
 
         async function fetchData() {
-            // Using a proxy or direct fetch. Note: dump1090 often needs a proxy if CORS isn't set.
-            // In a local environment, this usually works if the app is served from a similar origin.
             const url = `http://${config.ip}/dump1090-fa/data/aircraft.json`;
             
             try {
@@ -323,42 +351,42 @@
         }
 
         function isPlaneInView(p) {
-            // Horizontal check
             let azDiff = p.bearing - config.camAzimuth;
             if (azDiff > 180) azDiff -= 360;
             if (azDiff < -180) azDiff += 360;
 
             const inAz = Math.abs(azDiff) < (config.fovH / 2);
-            // Elevation check (Assuming camera is tilted roughly 30-45 degrees up)
             const inEl = p.elevation > 5 && p.elevation < 80; 
-            const closeEnough = p.distanceNM < 8; // Adjust based on lens
+            const closeEnough = p.distanceNM < 8; 
 
             return inAz && inEl && closeEnough;
         }
 
         function checkAutoSnap() {
-            if (!config.autoSnap) return;
+            if (!config.autoSnap || !stream) return; // Don't try snapping if no stream
 
             activePlanes.forEach(p => {
                 if (isPlaneInView(p) && !capturedHex.has(p.hex)) {
                     takeSnap(p.flight ? p.flight.trim() : p.hex.toUpperCase(), p);
                     capturedHex.add(p.hex);
-                    // Clear from memory after 5 minutes so we can snap it again if it orbits
                     setTimeout(() => capturedHex.delete(p.hex), 300000);
                 }
             });
         }
 
         function takeSnap(label, planeData = null) {
+            if (!stream) {
+                addLog("Cannot snap photo: Camera not active.");
+                return;
+            }
+
             const canvas = document.createElement('canvas');
-            canvas.width = elements.video.videoWidth;
-            canvas.height = elements.video.videoHeight;
+            canvas.width = elements.video.videoWidth || 1920;
+            canvas.height = elements.video.videoHeight || 1080;
             const ctx = canvas.getContext('2d');
             
-            // Draw video frame
             ctx.drawImage(elements.video, 0, 0, canvas.width, canvas.height);
             
-            // Add Timestamp & Label
             ctx.fillStyle = "rgba(0,0,0,0.5)";
             ctx.fillRect(10, canvas.height - 60, 300, 50);
             ctx.fillStyle = "white";
@@ -373,7 +401,6 @@
             const dataUrl = canvas.toDataURL('image/jpeg');
             saveToGallery(dataUrl, label);
             
-            // UI Feedback
             elements.flash.style.opacity = "1";
             setTimeout(() => elements.flash.style.opacity = "0", 100);
             addLog(`Captured: ${label}`);
