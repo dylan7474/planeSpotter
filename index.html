@@ -148,7 +148,7 @@
                     <div id="data-status" class="px-2 py-1 rounded-full text-[10px] bg-slate-700 text-slate-400">Data: Standby</div>
                 </div>
                 <div class="flex justify-center w-full pt-2">
-                    <canvas id="radar-canvas" width="240" height="240" class="bg-slate-900 rounded-full border-2 border-slate-700 shadow-inner"></canvas>
+                    <canvas id="radar-canvas" width="260" height="240" class="bg-slate-900 rounded-xl border-2 border-slate-700 shadow-inner"></canvas>
                 </div>
             </div>
 
@@ -391,84 +391,148 @@
             const ctx = canvas.getContext('2d');
             const w = canvas.width;
             const h = canvas.height;
+            // Shift center down slightly so tall altitude stalks don't clip out the top
             const cx = w / 2;
-            const cy = h / 2;
-            const maxR = Math.min(cx, cy) - 10; 
+            const cy = h / 2 + 30; 
+            const maxR = (w / 2) - 15; 
+            const tilt = 0.45; // Isometric squash factor
 
             ctx.clearRect(0, 0, w, h);
 
-            // 1. Draw Radar Rings & Crosshairs
-            ctx.strokeStyle = '#334155'; // slate-700
-            ctx.lineWidth = 1;
-            for(let i=1; i<=3; i++) {
+            // Elite Theme Colors
+            const gridColor = 'rgba(255, 140, 0, 0.3)';
+            const gridBright = 'rgba(255, 140, 0, 0.8)';
+            const fovColor = 'rgba(59, 130, 246, 0.15)';
+            const fovEdge = 'rgba(59, 130, 246, 0.5)';
+
+            // --- 1. Draw 3D Grid & Plane ---
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.scale(1, tilt);
+
+            // Radar Rings
+            ctx.strokeStyle = gridColor;
+            ctx.lineWidth = 1.5;
+            for(let i=1; i<=4; i++) {
                 ctx.beginPath();
-                ctx.arc(cx, cy, maxR * (i/3), 0, Math.PI * 2);
+                ctx.arc(0, 0, maxR * (i/4), 0, Math.PI * 2);
                 ctx.stroke();
             }
+
+            // Crosshairs
             ctx.beginPath();
-            ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
-            ctx.moveTo(0, cy); ctx.lineTo(w, cy);
+            ctx.moveTo(0, -maxR); ctx.lineTo(0, maxR);
+            ctx.moveTo(-maxR, 0); ctx.lineTo(maxR, 0);
             ctx.stroke();
 
-            // 2. Draw Camera FOV Cone
-            // Note: Canvas arc starts at 3 o'clock (0 rad). Bearing 0 is 12 o'clock (-90 deg)
+            // Camera FOV Cone
             const fovStart = (config.camAzimuth - config.fovH/2 - 90) * Math.PI / 180;
             const fovEnd = (config.camAzimuth + config.fovH/2 - 90) * Math.PI / 180;
-            ctx.fillStyle = 'rgba(59, 130, 246, 0.15)'; // faint blue cone
+            ctx.fillStyle = fovColor;
             ctx.beginPath();
-            ctx.moveTo(cx, cy);
-            ctx.arc(cx, cy, maxR, fovStart, fovEnd);
+            ctx.moveTo(0, 0);
+            ctx.arc(0, 0, maxR, fovStart, fovEnd);
             ctx.closePath();
             ctx.fill();
             
-            // Highlight the configured proximity arc limit
+            // Highlight the configured proximity arc limit on the plane
             const distLimitPx = Math.min((config.distLimit / 30) * maxR, maxR);
-            ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
-            ctx.lineWidth = 2;
+            ctx.strokeStyle = fovEdge;
+            ctx.lineWidth = 3;
             ctx.beginPath();
-            ctx.arc(cx, cy, distLimitPx, fovStart, fovEnd);
+            ctx.arc(0, 0, distLimitPx, fovStart, fovEnd);
             ctx.stroke();
 
-            // 3. Draw Planes (Elite Dangerous Style)
-            const radarMaxDistNM = 30; // Lock radar scale to 30 NM radius
-            
+            ctx.restore();
+
+            // --- 2. Draw Player Ship (Center Triangle) ---
+            ctx.fillStyle = gridBright;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - 6);
+            ctx.lineTo(cx - 5, cy + 5);
+            ctx.lineTo(cx + 5, cy + 5);
+            ctx.fill();
+
+            // --- 3. Calculate & Sort Planes (Back-to-Front Depth Sorting) ---
+            const radarMaxDistNM = 30; 
+            let renderItems = [];
+
             activePlanes.forEach(p => {
-                if (p.distanceNM > radarMaxDistNM) return; // Off radar
+                if (p.distanceNM > radarMaxDistNM) return; 
                 
                 const r = (p.distanceNM / radarMaxDistNM) * maxR;
                 const angle = (p.bearing - 90) * Math.PI / 180;
-                const px = cx + Math.cos(angle) * r;
-                const py = cy + Math.sin(angle) * r;
+                
+                // Base coordinates (intersection with 3D radar grid)
+                const bx = cx + Math.cos(angle) * r;
+                const by = cy + Math.sin(angle) * r * tilt; 
 
-                const inView = isPlaneInView(p);
+                // Altitude stalk (0 to 40,000 feet mapped to pixels)
+                // Since we are on the ground, altitude goes UP
+                const stalkLen = Math.min((p.alt_baro / 40000) * 85, 120); 
                 
-                // Elite Style stalk: Alt up to 40,000ft mapped to stalk length
-                const stalkLen = (p.alt_baro / 40000) * 30; 
+                renderItems.push({
+                    plane: p,
+                    bx, by,
+                    px: bx,
+                    py: by - stalkLen,
+                    inView: isPlaneInView(p),
+                    depth: by // Sort by screen Y of the grid intersection
+                });
+            });
+
+            // Sort so planes further "back" on the grid are drawn first
+            renderItems.sort((a, b) => a.depth - b.depth);
+
+            // --- 4. Render Planes (Elite Style Stalks) ---
+            renderItems.forEach(item => {
+                const { plane: p, bx, by, px, py, inView } = item;
                 
-                // Draw base dot on the radar plane
-                ctx.fillStyle = inView ? 'rgba(239, 68, 68, 0.4)' : 'rgba(148, 163, 184, 0.4)';
+                // Colors: Green = standard, Bright Red = Target Lock (In View)
+                const baseColor = inView ? 'rgba(239, 68, 68, 0.4)' : 'rgba(34, 197, 94, 0.4)';
+                const stalkColor = inView ? 'rgba(239, 68, 68, 0.8)' : 'rgba(34, 197, 94, 0.8)';
+                const blipColor = inView ? '#ef4444' : '#22c55e'; 
+                const labelColor = inView ? '#fca5a5' : '#86efac';
+
+                // Base Shadow (Ellipse on the grid)
+                ctx.fillStyle = baseColor;
                 ctx.beginPath();
-                ctx.arc(px, py, 1.5, 0, Math.PI*2);
+                // Browsers safely support ellipse now, fallback to arc if not
+                if(ctx.ellipse) {
+                    ctx.ellipse(bx, by, 5, 5 * tilt, 0, 0, Math.PI * 2);
+                } else {
+                    ctx.arc(bx, by, 3, 0, Math.PI*2); 
+                }
                 ctx.fill();
 
-                // Draw vertical stalk
-                ctx.strokeStyle = inView ? 'rgba(239, 68, 68, 0.6)' : 'rgba(148, 163, 184, 0.6)';
-                ctx.lineWidth = 1;
+                // Stalk Line
+                ctx.strokeStyle = stalkColor;
+                ctx.lineWidth = 1.5;
                 ctx.beginPath();
-                ctx.moveTo(px, py);
-                ctx.lineTo(px, py - stalkLen);
+                ctx.moveTo(bx, by);
+                ctx.lineTo(px, py);
                 ctx.stroke();
 
-                // Draw actual aircraft blip
-                ctx.fillStyle = inView ? '#ef4444' : '#94a3b8'; // Red if in view, slate if not
-                ctx.beginPath();
-                ctx.arc(px, py - stalkLen, 3, 0, Math.PI*2);
-                ctx.fill();
+                // Blip (Square representing the ship)
+                ctx.fillStyle = blipColor;
+                ctx.fillRect(px - 3, py - 3, 6, 6);
                 
-                // Flight label next to blip
-                ctx.fillStyle = inView ? '#fca5a5' : '#64748b';
-                ctx.font = "8px monospace";
-                ctx.fillText(p.flight ? p.flight.trim() : p.hex, px + 4, py - stalkLen + 3);
+                // Heading Tail (if track data exists)
+                if (p.track !== undefined) {
+                    const trackRad = (p.track - 90) * Math.PI / 180;
+                    ctx.strokeStyle = blipColor;
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(px, py);
+                    // Apply isometric tilt to the heading vector
+                    ctx.lineTo(px + Math.cos(trackRad)*10, py + Math.sin(trackRad)*10*tilt);
+                    ctx.stroke();
+                }
+
+                // Flight Label
+                ctx.fillStyle = labelColor;
+                ctx.font = "9px monospace";
+                ctx.fillText(p.flight ? p.flight.trim() : p.hex, px + 7, py + 3);
             });
         }
 
