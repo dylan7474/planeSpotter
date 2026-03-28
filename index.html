@@ -105,11 +105,11 @@
                     </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Your Lat</label>
-                        <input id="my-lat" type="number" step="0.000001" value="54.531911" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
+                        <input id="my-lat" type="number" step="0.000001" placeholder="e.g. 54.531911" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
                     </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Your Lon</label>
-                        <input id="my-lon" type="number" step="0.000001" value="-1.087992" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
+                        <input id="my-lon" type="number" step="0.000001" placeholder="e.g. -1.087992" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
                     </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Cam Azimuth (East=90)</label>
@@ -174,8 +174,8 @@
         // State
         let config = {
             ip: '192.168.50.100:8080',
-            lat: 54.531911,
-            lon: -1.087992,
+            lat: 0,
+            lon: 0,
             camAzimuth: 90, // Facing East
             fovH: 60,       // Estimated Horizontal FOV of webcam
             fovV: 40,       // Estimated Vertical FOV
@@ -206,6 +206,7 @@
         // --- Initialization ---
 
         window.onload = async () => {
+            loadSettings();
             setupCamera();
             
             document.getElementById('btn-start').onclick = toggleMonitoring;
@@ -300,11 +301,32 @@
 
         function updateConfig() {
             config.ip = document.getElementById('dump-ip').value;
-            config.lat = parseFloat(document.getElementById('my-lat').value);
-            config.lon = parseFloat(document.getElementById('my-lon').value);
-            config.camAzimuth = parseFloat(document.getElementById('cam-az').value);
+            config.lat = parseFloat(document.getElementById('my-lat').value) || 0;
+            config.lon = parseFloat(document.getElementById('my-lon').value) || 0;
+            config.camAzimuth = parseFloat(document.getElementById('cam-az').value) || 90;
             config.distLimit = parseFloat(elements.distSlider.value);
             config.autoSnap = document.getElementById('auto-snap').checked;
+            saveSettings();
+        }
+
+        function loadSettings() {
+            const savedLat = localStorage.getItem('skywatcher_lat');
+            const savedLon = localStorage.getItem('skywatcher_lon');
+            const savedIp = localStorage.getItem('skywatcher_ip');
+            const savedAz = localStorage.getItem('skywatcher_az');
+            
+            if (savedLat) document.getElementById('my-lat').value = savedLat;
+            if (savedLon) document.getElementById('my-lon').value = savedLon;
+            if (savedIp) document.getElementById('dump-ip').value = savedIp;
+            if (savedAz) document.getElementById('cam-az').value = savedAz;
+        }
+
+        function saveSettings() {
+            localStorage.setItem('skywatcher_lat', document.getElementById('my-lat').value);
+            localStorage.setItem('skywatcher_lon', document.getElementById('my-lon').value);
+            localStorage.setItem('skywatcher_ip', document.getElementById('dump-ip').value);
+            localStorage.setItem('skywatcher_az', document.getElementById('cam-az').value);
+            addLog("Configuration saved to browser storage.");
         }
 
         async function fetchData() {
