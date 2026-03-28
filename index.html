@@ -229,6 +229,9 @@
                 elements.distVal.innerText = e.target.value;
                 config.distLimit = parseFloat(e.target.value); // Real-time update
             });
+
+            // Start the continuous animated radar loop
+            requestAnimationFrame(drawRadarLoop);
         };
 
         function toggleCameraPreview() {
@@ -381,11 +384,10 @@
                 });
 
             renderPlaneList();
-            drawRadar();
             checkAutoSnap();
         }
 
-        function drawRadar() {
+        function drawRadarLoop() {
             if (!elements.radar) return;
             const canvas = elements.radar;
             const ctx = canvas.getContext('2d');
@@ -396,33 +398,69 @@
             const cy = h / 2 + 30; 
             const maxR = (w / 2) - 15; 
             const tilt = 0.45; // Isometric squash factor
+            const time = Date.now() / 1000; // Used for animations
 
             ctx.clearRect(0, 0, w, h);
 
-            // Elite Theme Colors
-            const gridColor = 'rgba(255, 140, 0, 0.3)';
-            const gridBright = 'rgba(255, 140, 0, 0.8)';
+            // Elite Theme Colors - Enhanced
+            const gridColor = 'rgba(255, 140, 0, 0.4)';
+            const gridBright = 'rgba(255, 180, 50, 0.9)';
             const fovColor = 'rgba(59, 130, 246, 0.15)';
-            const fovEdge = 'rgba(59, 130, 246, 0.5)';
+            const fovEdge = 'rgba(59, 130, 246, 0.6)';
 
             // --- 1. Draw 3D Grid & Plane ---
             ctx.save();
             ctx.translate(cx, cy);
             ctx.scale(1, tilt);
 
-            // Radar Rings
-            ctx.strokeStyle = gridColor;
+            // Add global glow for the grid
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = 'rgba(255, 140, 0, 0.5)';
+
+            // Radar Rings with varying styles
             ctx.lineWidth = 1.5;
-            for(let i=1; i<=4; i++) {
+            for(let i=1; i<=5; i++) {
                 ctx.beginPath();
-                ctx.arc(0, 0, maxR * (i/4), 0, Math.PI * 2);
+                ctx.strokeStyle = i === 5 ? gridBright : gridColor;
+                if (i === 5) {
+                    ctx.setLineDash([4, 6]); // Outer dashed ring
+                    ctx.lineWidth = 2;
+                } else if (i === 3) {
+                    ctx.setLineDash([2, 4]); // Middle dashed ring
+                } else {
+                    ctx.setLineDash([]); // Solid rings
+                }
+                ctx.arc(0, 0, maxR * (i/5), 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.setLineDash([]); // Reset dash
+
+            // Radial Crosshairs (8 segments)
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = gridColor;
+            for(let i=0; i<8; i++) {
+                const angle = (i * Math.PI) / 4;
+                ctx.beginPath();
+                ctx.moveTo(Math.cos(angle) * (maxR * 0.15), Math.sin(angle) * (maxR * 0.15)); // Leave center open
+                ctx.lineTo(Math.cos(angle) * maxR, Math.sin(angle) * maxR);
                 ctx.stroke();
             }
 
-            // Crosshairs
+            // Radar Sweep Animation
+            const sweepAngle = (time * 1.5) % (Math.PI * 2);
+            ctx.shadowBlur = 0; // Turn off glow for sweep fill
+            ctx.fillStyle = 'rgba(255, 140, 0, 0.15)';
             ctx.beginPath();
-            ctx.moveTo(0, -maxR); ctx.lineTo(0, maxR);
-            ctx.moveTo(-maxR, 0); ctx.lineTo(maxR, 0);
+            ctx.moveTo(0, 0);
+            ctx.arc(0, 0, maxR, sweepAngle, sweepAngle + 0.5);
+            ctx.closePath();
+            ctx.fill();
+            // Sweep Leading Edge
+            ctx.strokeStyle = gridBright;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(Math.cos(sweepAngle + 0.5) * maxR, Math.sin(sweepAngle + 0.5) * maxR);
             ctx.stroke();
 
             // Camera FOV Cone
@@ -439,19 +477,26 @@
             const distLimitPx = Math.min((config.distLimit / 30) * maxR, maxR);
             ctx.strokeStyle = fovEdge;
             ctx.lineWidth = 3;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = 'rgba(59, 130, 246, 0.8)';
             ctx.beginPath();
             ctx.arc(0, 0, distLimitPx, fovStart, fovEnd);
             ctx.stroke();
 
             ctx.restore();
 
-            // --- 2. Draw Player Ship (Center Triangle) ---
+            // --- 2. Draw Player Ship (Center Chevron) ---
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = gridBright;
             ctx.fillStyle = gridBright;
             ctx.beginPath();
-            ctx.moveTo(cx, cy - 6);
-            ctx.lineTo(cx - 5, cy + 5);
-            ctx.lineTo(cx + 5, cy + 5);
+            ctx.moveTo(cx, cy - 8);
+            ctx.lineTo(cx + 6, cy + 6);
+            ctx.lineTo(cx, cy + 2);
+            ctx.lineTo(cx - 6, cy + 6);
+            ctx.closePath();
             ctx.fill();
+            ctx.shadowBlur = 0;
 
             // --- 3. Calculate & Sort Planes (Back-to-Front Depth Sorting) ---
             const radarMaxDistNM = 30; 
@@ -468,7 +513,6 @@
                 const by = cy + Math.sin(angle) * r * tilt; 
 
                 // Altitude stalk (0 to 40,000 feet mapped to pixels)
-                // Since we are on the ground, altitude goes UP
                 const stalkLen = Math.min((p.alt_baro / 40000) * 85, 120); 
                 
                 renderItems.push({
@@ -484,12 +528,14 @@
             // Sort so planes further "back" on the grid are drawn first
             renderItems.sort((a, b) => a.depth - b.depth);
 
-            // --- 4. Render Planes (Elite Style Stalks) ---
+            // --- 4. Render Planes (Holographic Style) ---
+            const pulse = (Math.sin(time * 6) + 1) / 2; // 0 to 1 pulsating value for targets
+
             renderItems.forEach(item => {
                 const { plane: p, bx, by, px, py, inView } = item;
                 
                 // Colors: Green = standard, Bright Red = Target Lock (In View)
-                const baseColor = inView ? 'rgba(239, 68, 68, 0.4)' : 'rgba(34, 197, 94, 0.4)';
+                const baseColor = inView ? 'rgba(239, 68, 68, 0.5)' : 'rgba(34, 197, 94, 0.5)';
                 const stalkColor = inView ? 'rgba(239, 68, 68, 0.8)' : 'rgba(34, 197, 94, 0.8)';
                 const blipColor = inView ? '#ef4444' : '#22c55e'; 
                 const labelColor = inView ? '#fca5a5' : '#86efac';
@@ -497,25 +543,36 @@
                 // Base Shadow (Ellipse on the grid)
                 ctx.fillStyle = baseColor;
                 ctx.beginPath();
-                // Browsers safely support ellipse now, fallback to arc if not
                 if(ctx.ellipse) {
-                    ctx.ellipse(bx, by, 5, 5 * tilt, 0, 0, Math.PI * 2);
+                    ctx.ellipse(bx, by, 6, 6 * tilt, 0, 0, Math.PI * 2);
                 } else {
-                    ctx.arc(bx, by, 3, 0, Math.PI*2); 
+                    ctx.arc(bx, by, 4, 0, Math.PI*2); 
                 }
                 ctx.fill();
 
-                // Stalk Line
+                // Holographic Segmented Stalk Line
                 ctx.strokeStyle = stalkColor;
-                ctx.lineWidth = 1.5;
+                ctx.lineWidth = inView ? 2 : 1.5;
+                ctx.setLineDash([2, 2]); 
                 ctx.beginPath();
                 ctx.moveTo(bx, by);
                 ctx.lineTo(px, py);
                 ctx.stroke();
+                ctx.setLineDash([]);
 
-                // Blip (Square representing the ship)
+                // Blip Glow Effect
+                ctx.shadowBlur = inView ? 15 + (10 * pulse) : 8;
+                ctx.shadowColor = blipColor;
+
+                // Blip (Sci-Fi Diamond Shape)
                 ctx.fillStyle = blipColor;
-                ctx.fillRect(px - 3, py - 3, 6, 6);
+                ctx.beginPath();
+                ctx.moveTo(px, py - 4);
+                ctx.lineTo(px + 4, py);
+                ctx.lineTo(px, py + 4);
+                ctx.lineTo(px - 4, py);
+                ctx.closePath();
+                ctx.fill();
                 
                 // Heading Tail (if track data exists)
                 if (p.track !== undefined) {
@@ -525,15 +582,36 @@
                     ctx.beginPath();
                     ctx.moveTo(px, py);
                     // Apply isometric tilt to the heading vector
-                    ctx.lineTo(px + Math.cos(trackRad)*10, py + Math.sin(trackRad)*10*tilt);
+                    ctx.lineTo(px + Math.cos(trackRad)*12, py + Math.sin(trackRad)*12*tilt);
                     ctx.stroke();
                 }
 
+                // Target Lock Brackets for planes in FOV
+                if (inView) {
+                    ctx.strokeStyle = 'rgba(239, 68, 68, 0.9)';
+                    ctx.lineWidth = 1;
+                    const s = 8 + (2 * pulse); // Pulsing bracket size
+                    
+                    ctx.beginPath(); // Top-Left
+                    ctx.moveTo(px-s, py-s/2); ctx.lineTo(px-s, py-s); ctx.lineTo(px-s/2, py-s); ctx.stroke();
+                    ctx.beginPath(); // Top-Right
+                    ctx.moveTo(px+s/2, py-s); ctx.lineTo(px+s, py-s); ctx.lineTo(px+s, py-s/2); ctx.stroke();
+                    ctx.beginPath(); // Bottom-Left
+                    ctx.moveTo(px-s/2, py+s); ctx.lineTo(px-s, py+s); ctx.lineTo(px-s, py+s/2); ctx.stroke();
+                    ctx.beginPath(); // Bottom-Right
+                    ctx.moveTo(px+s, py+s/2); ctx.lineTo(px+s, py+s); ctx.lineTo(px+s/2, py+s); ctx.stroke();
+                }
+
+                ctx.shadowBlur = 0; // Reset glow for text
+
                 // Flight Label
                 ctx.fillStyle = labelColor;
-                ctx.font = "9px monospace";
-                ctx.fillText(p.flight ? p.flight.trim() : p.hex, px + 7, py + 3);
+                ctx.font = "bold 9px monospace";
+                ctx.fillText(p.flight ? p.flight.trim() : p.hex, px + 8, py + 4);
             });
+
+            // Loop the animation
+            requestAnimationFrame(drawRadarLoop);
         }
 
         function calculateRelative(pLat, pLon, pAltFeet) {
