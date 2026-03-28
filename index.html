@@ -55,6 +55,24 @@
             border-bottom: 1px solid #eee;
             padding: 2px 0;
         }
+        /* Custom slider styling */
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+        }
+        input[type=range]::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            border: none;
+        }
     </style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen p-4">
@@ -99,7 +117,16 @@
                     </div>
                 </div>
 
-                <div class="flex flex-wrap gap-4 pt-2">
+                <!-- Proximity Slider -->
+                <div class="pt-2 border-t border-slate-700">
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="text-xs text-slate-400">Max Capture Distance (Proximity)</label>
+                        <span class="text-sm font-bold text-blue-400"><span id="dist-val">10</span> NM</span>
+                    </div>
+                    <input type="range" id="dist-slider" min="1" max="30" step="0.5" value="10" class="w-full h-2 bg-slate-600 rounded-lg appearance-none cursor-pointer">
+                </div>
+
+                <div class="flex flex-wrap gap-4 pt-2 border-t border-slate-700">
                     <button id="btn-start" class="bg-blue-600 hover:bg-blue-500 px-6 py-2 rounded font-bold transition">Start Monitoring</button>
                     <button id="btn-toggle-cam" class="bg-indigo-600 hover:bg-indigo-500 px-6 py-2 rounded font-bold transition">Test Camera</button>
                     <button id="btn-manual" class="bg-slate-600 hover:bg-slate-500 px-6 py-2 rounded font-bold transition">Manual Snap</button>
@@ -167,7 +194,9 @@
             flash: document.getElementById('capture-flash'),
             camError: document.getElementById('camera-error'),
             camErrorMsg: document.getElementById('camera-error-msg'),
-            btnToggleCam: document.getElementById('btn-toggle-cam')
+            btnToggleCam: document.getElementById('btn-toggle-cam'),
+            distSlider: document.getElementById('dist-slider'),
+            distVal: document.getElementById('dist-val')
         };
 
         let activePlanes = [];
@@ -183,6 +212,12 @@
             document.getElementById('btn-manual').onclick = () => takeSnap('MANUAL');
             document.getElementById('btn-clear-gallery').onclick = () => elements.gallery.innerHTML = '';
             elements.btnToggleCam.onclick = toggleCameraPreview;
+            
+            // Proximity slider listener
+            elements.distSlider.addEventListener('input', (e) => {
+                elements.distVal.innerText = e.target.value;
+                config.distLimit = parseFloat(e.target.value); // Real-time update
+            });
         };
 
         function toggleCameraPreview() {
@@ -268,6 +303,7 @@
             config.lat = parseFloat(document.getElementById('my-lat').value);
             config.lon = parseFloat(document.getElementById('my-lon').value);
             config.camAzimuth = parseFloat(document.getElementById('cam-az').value);
+            config.distLimit = parseFloat(elements.distSlider.value);
             config.autoSnap = document.getElementById('auto-snap').checked;
         }
 
@@ -376,7 +412,7 @@
 
             const inAz = Math.abs(azDiff) < (config.fovH / 2);
             const inEl = p.elevation > 5 && p.elevation < 80; 
-            const closeEnough = p.distanceNM < 8; 
+            const closeEnough = p.distanceNM <= config.distLimit; 
 
             return inAz && inEl && closeEnough;
         }
