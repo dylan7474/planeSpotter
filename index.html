@@ -228,10 +228,11 @@
             elements.distSlider.addEventListener('input', (e) => {
                 elements.distVal.innerText = e.target.value;
                 config.distLimit = parseFloat(e.target.value); // Real-time update
+                drawRadar(); // Force redraw when slider moves
             });
 
-            // Start the continuous animated radar loop
-            requestAnimationFrame(drawRadarLoop);
+            // Initial draw of the empty radar
+            drawRadar();
         };
 
         function toggleCameraPreview() {
@@ -384,10 +385,11 @@
                 });
 
             renderPlaneList();
+            drawRadar();
             checkAutoSnap();
         }
 
-        function drawRadarLoop() {
+        function drawRadar() {
             if (!elements.radar) return;
             const canvas = elements.radar;
             const ctx = canvas.getContext('2d');
@@ -398,7 +400,6 @@
             const cy = h / 2 + 30; 
             const maxR = (w / 2) - 15; 
             const tilt = 0.45; // Isometric squash factor
-            const time = Date.now() / 1000; // Used for animations
 
             ctx.clearRect(0, 0, w, h);
 
@@ -446,26 +447,11 @@
                 ctx.stroke();
             }
 
-            // Radar Sweep Animation
-            const sweepAngle = (time * 1.5) % (Math.PI * 2);
-            ctx.shadowBlur = 0; // Turn off glow for sweep fill
-            ctx.fillStyle = 'rgba(255, 140, 0, 0.15)';
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.arc(0, 0, maxR, sweepAngle, sweepAngle + 0.5);
-            ctx.closePath();
-            ctx.fill();
-            // Sweep Leading Edge
-            ctx.strokeStyle = gridBright;
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(Math.cos(sweepAngle + 0.5) * maxR, Math.sin(sweepAngle + 0.5) * maxR);
-            ctx.stroke();
-
             // Camera FOV Cone
             const fovStart = (config.camAzimuth - config.fovH/2 - 90) * Math.PI / 180;
             const fovEnd = (config.camAzimuth + config.fovH/2 - 90) * Math.PI / 180;
+            
+            ctx.shadowBlur = 0; // Turn off glow for FOV fill
             ctx.fillStyle = fovColor;
             ctx.beginPath();
             ctx.moveTo(0, 0);
@@ -529,7 +515,6 @@
             renderItems.sort((a, b) => a.depth - b.depth);
 
             // --- 4. Render Planes (Holographic Style) ---
-            const pulse = (Math.sin(time * 6) + 1) / 2; // 0 to 1 pulsating value for targets
 
             renderItems.forEach(item => {
                 const { plane: p, bx, by, px, py, inView } = item;
@@ -561,7 +546,7 @@
                 ctx.setLineDash([]);
 
                 // Blip Glow Effect
-                ctx.shadowBlur = inView ? 15 + (10 * pulse) : 8;
+                ctx.shadowBlur = inView ? 20 : 8;
                 ctx.shadowColor = blipColor;
 
                 // Blip (Sci-Fi Diamond Shape)
@@ -589,8 +574,8 @@
                 // Target Lock Brackets for planes in FOV
                 if (inView) {
                     ctx.strokeStyle = 'rgba(239, 68, 68, 0.9)';
-                    ctx.lineWidth = 1;
-                    const s = 8 + (2 * pulse); // Pulsing bracket size
+                    ctx.lineWidth = 1.5;
+                    const s = 9; // Fixed bracket size
                     
                     ctx.beginPath(); // Top-Left
                     ctx.moveTo(px-s, py-s/2); ctx.lineTo(px-s, py-s); ctx.lineTo(px-s/2, py-s); ctx.stroke();
@@ -609,9 +594,6 @@
                 ctx.font = "bold 9px monospace";
                 ctx.fillText(p.flight ? p.flight.trim() : p.hex, px + 8, py + 4);
             });
-
-            // Loop the animation
-            requestAnimationFrame(drawRadarLoop);
         }
 
         function calculateRelative(pLat, pLon, pAltFeet) {
