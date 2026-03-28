@@ -389,6 +389,9 @@
         let weatherTimer = null;
         let isDataConnected = null;
         let isLookupConnected = null;
+        const FETCH_TIMEOUT_MS = 12000;
+        let lastAdsbErrorSignature = '';
+        let lastAdsbErrorLoggedAt = 0;
 
         function toggleMonitoring() {
             if (monitorTimer) {
@@ -564,9 +567,7 @@
             }
             
             try {
-                const response = await fetch(url);
-                if (!response.ok) throw new Error("Network response was not ok");
-                const data = await response.json();
+                const data = await fetchJsonWithDiagnostics(url, sourceName);
                 let aircraft = Array.isArray(data.aircraft)
                     ? data.aircraft
                     : (Array.isArray(data.ac) ? data.ac : []);
@@ -580,9 +581,11 @@
                 updateDataStatus(true, '', sourceName);
                 processPlanes(aircraft);
             } catch (err) {
-                updateDataStatus(false, err.message, sourceName);
+                const diagnostic = describeFetchError(err, sourceName, url);
+                updateDataStatus(false, diagnostic.shortMessage, sourceName);
                 if (config.dataSource === 'adsb_lol') {
-                    updateLookupStatus(false, err.message);
+                    updateLookupStatus(false, diagnostic.shortMessage);
+                    logAdsbFailure(diagnostic);
                 }
             }
         }
@@ -616,9 +619,7 @@
             const lookupUrl = `https://api.adsb.lol/v2/lat/${config.lat}/lon/${config.lon}/dist/${config.adsbRangeNm}`;
 
             try {
-                const response = await fetch(lookupUrl);
-                if (!response.ok) throw new Error(`Lookup HTTP ${response.status}`);
-                const payload = await response.json();
+                const payload = await fetchJsonWithDiagnostics(lookupUrl, 'Lookup API');
                 const lookupAircraft = Array.isArray(payload.aircraft)
                     ? payload.aircraft
                     : (Array.isArray(payload.ac) ? payload.ac : []);
@@ -633,9 +634,57 @@
                 updateLookupStatus(true, `Lookup ok (${lookupAircraft.length} aircraft)`);
                 return enriched;
             } catch (err) {
-                updateLookupStatus(false, err.message);
+                const diagnostic = describeFetchError(err, 'Lookup API', lookupUrl);
+                updateLookupStatus(false, diagnostic.shortMessage);
                 return aircraft;
             }
+        }
+
+        async function fetchJsonWithDiagnostics(url, sourceLabel) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(`timeout-${FETCH_TIMEOUT_MS}`), FETCH_TIMEOUT_MS);
+
+            try {
+                const response = await fetch(url, { signal: controller.signal });
+                if (!response.ok) {
+                    const bodySnippet = await response.text()
+                        .then((txt) => txt.trim().slice(0, 120))
+                        .catch(() => '');
+                    const statusDetail = `${response.status} ${response.statusText}`.trim();
+                    const snippetDetail = bodySnippet ? ` | body: ${bodySnippet}` : '';
+                    throw new Error(`HTTP ${statusDetail}${snippetDetail}`);
+                }
+                return await response.json();
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        }
+
+        function describeFetchError(err, sourceLabel, url) {
+            const errText = err?.message || String(err || 'Unknown error');
+            let shortMessage = errText;
+
+            if (err?.name === 'AbortError' || errText.includes(`timeout-${FETCH_TIMEOUT_MS}`)) {
+                shortMessage = `Request timed out after ${FETCH_TIMEOUT_MS / 1000}s`;
+            } else if (errText === 'Failed to fetch') {
+                shortMessage = 'Network/CORS failure (check internet, VPN, or mixed-content blocking)';
+            }
+
+            return {
+                shortMessage,
+                fullMessage: `${sourceLabel} error: ${shortMessage} | URL: ${url}`
+            };
+        }
+
+        function logAdsbFailure(diagnostic) {
+            const now = Date.now();
+            const signature = diagnostic.fullMessage;
+            const shouldLog = signature !== lastAdsbErrorSignature || (now - lastAdsbErrorLoggedAt) > 30000;
+            if (!shouldLog) return;
+
+            addLog(diagnostic.fullMessage);
+            lastAdsbErrorSignature = signature;
+            lastAdsbErrorLoggedAt = now;
         }
 
         function normalizeHex(value) {
