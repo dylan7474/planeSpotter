@@ -140,12 +140,6 @@
                             <label for="snap-clear-only" class="text-xs text-slate-400">Clear skies only</label>
                         </div>
                     </div>
-                    <div class="flex flex-col gap-1 justify-center ml-2 border-l border-slate-600 pl-4">
-                        <div class="flex items-center gap-2">
-                            <input type="checkbox" id="show-topo" checked>
-                            <label for="show-topo" class="text-xs text-slate-400">Terrain Grid</label>
-                        </div>
-                    </div>
                 </div>
             </div>
             
@@ -210,8 +204,7 @@
             pollInterval: 1000,
             autoSnap: true,
             snapClearOnly: true,
-            showRadarOnly: false,
-            showTopo: true
+            showRadarOnly: false
         };
 
         const elements = {
@@ -229,8 +222,7 @@
             distVal: document.getElementById('dist-val'),
             radar: document.getElementById('radar-canvas'),
             weatherStatus: document.getElementById('weather-status'),
-            btnToggleList: document.getElementById('btn-toggle-list'),
-            chkShowTopo: document.getElementById('show-topo')
+            btnToggleList: document.getElementById('btn-toggle-list')
         };
 
         let activePlanes = [];
@@ -238,11 +230,6 @@
         let stream = null;
         let currentWeatherCode = -1; // -1: Unknown, 0-2: Clear/Partly Cloudy, 3+: Cloudy/Poor
         
-        // Topography Grid Cache
-        let topoGrid = null;
-        let lastFetchedLat = 0;
-        let lastFetchedLon = 0;
-
         // --- Initialization ---
 
         window.onload = async () => {
@@ -254,13 +241,6 @@
             document.getElementById('btn-clear-gallery').onclick = () => elements.gallery.innerHTML = '';
             elements.btnToggleCam.onclick = toggleCameraPreview;
             elements.btnToggleList.onclick = togglePlaneList;
-            
-            // Checkbox listeners
-            elements.chkShowTopo.addEventListener('change', (e) => {
-                config.showTopo = e.target.checked;
-                saveSettings();
-                drawRadar();
-            });
 
             // Proximity slider listener
             elements.distSlider.addEventListener('input', (e) => {
@@ -268,11 +248,6 @@
                 config.distLimit = parseFloat(e.target.value); 
                 drawRadar(); 
             });
-
-            // Fetch topo immediately if coordinates were loaded from cache
-            if (config.lat !== 0 && config.lon !== 0) {
-                fetchTopography();
-            }
 
             // Initial draw of the empty radar
             drawRadar();
@@ -375,19 +350,14 @@
             const newLat = parseFloat(document.getElementById('my-lat').value) || 0;
             const newLon = parseFloat(document.getElementById('my-lon').value) || 0;
             
-            // If location changed, refresh topography
-            if (newLat !== config.lat || newLon !== config.lon) {
-                config.lat = newLat;
-                config.lon = newLon;
-                fetchTopography();
-            }
+            config.lat = newLat;
+            config.lon = newLon;
 
             config.ip = document.getElementById('dump-ip').value;
             config.camAzimuth = parseFloat(document.getElementById('cam-az').value) || 90;
             config.distLimit = parseFloat(elements.distSlider.value);
             config.autoSnap = document.getElementById('auto-snap').checked;
             config.snapClearOnly = document.getElementById('snap-clear-only').checked;
-            config.showTopo = elements.chkShowTopo.checked;
             saveSettings();
         }
 
@@ -397,7 +367,6 @@
             const savedIp = localStorage.getItem('skywatcher_ip');
             const savedAz = localStorage.getItem('skywatcher_az');
             const savedClear = localStorage.getItem('skywatcher_clear');
-            const savedTopo = localStorage.getItem('skywatcher_topo');
             
             if (savedLat) {
                 document.getElementById('my-lat').value = savedLat;
@@ -411,10 +380,6 @@
             if (savedAz) document.getElementById('cam-az').value = savedAz;
             
             if (savedClear !== null) document.getElementById('snap-clear-only').checked = savedClear === 'true';
-            if (savedTopo !== null) {
-                config.showTopo = savedTopo === 'true';
-                elements.chkShowTopo.checked = config.showTopo;
-            }
         }
 
         function saveSettings() {
@@ -423,69 +388,7 @@
             localStorage.setItem('skywatcher_ip', document.getElementById('dump-ip').value);
             localStorage.setItem('skywatcher_az', document.getElementById('cam-az').value);
             localStorage.setItem('skywatcher_clear', document.getElementById('snap-clear-only').checked);
-            localStorage.setItem('skywatcher_topo', elements.chkShowTopo.checked);
             addLog("Configuration saved to browser storage.");
-        }
-
-        // --- Topography Logic (Open-Meteo) ---
-        async function fetchTopography() {
-            if (!config.lat || !config.lon) return;
-            if (lastFetchedLat === config.lat && lastFetchedLon === config.lon && topoGrid) return;
-            
-            lastFetchedLat = config.lat;
-            lastFetchedLon = config.lon;
-
-            // Open-Meteo allows max 100 points per request. We'll build a 10x10 grid.
-            const gridSize = 10; 
-            const radiusNM = 30; // Scan covers 30 NM radius
-            
-            // Approximate degree conversions
-            const radiusDegLat = radiusNM / 60;
-            const radiusDegLon = radiusNM / (60 * Math.cos(config.lat * Math.PI / 180));
-            
-            let lats = [];
-            let lons = [];
-            let localPoints = [];
-            
-            addLog("Calculating regional terrain matrix...");
-
-            for (let i = 0; i < gridSize; i++) {
-                for (let j = 0; j < gridSize; j++) {
-                    // Map j,i to normalized space -1.0 to 1.0 (X, Y)
-                    const nx = (j / (gridSize - 1)) * 2 - 1; 
-                    const ny = (1 - (i / (gridSize - 1))) * 2 - 1; 
-                    
-                    const lat = config.lat + ny * radiusDegLat;
-                    const lon = config.lon + nx * radiusDegLon;
-                    
-                    lats.push(lat.toFixed(4));
-                    lons.push(lon.toFixed(4));
-                    localPoints.push({ nx, ny });
-                }
-            }
-            
-            try {
-                const url = `https://api.open-meteo.com/v1/elevation?latitude=${lats.join(',')}&longitude=${lons.join(',')}`;
-                const res = await fetch(url);
-                if (!res.ok) throw new Error("Topo fetch failed");
-                const data = await res.json();
-                
-                if (data.elevation) {
-                    topoGrid = {
-                        size: gridSize,
-                        points: localPoints.map((p, idx) => ({
-                            ...p,
-                            elev: data.elevation[idx] || 0
-                        }))
-                    };
-                    addLog("Terrain topography loaded (100 sectors).");
-                    drawRadar(); // Redraw with topography
-                }
-            } catch (e) {
-                console.error("Topography Error:", e);
-                addLog("Topography fetch failed.");
-                topoGrid = null;
-            }
         }
 
         // --- Weather Logic (Open-Meteo) ---
@@ -699,19 +602,19 @@
                     for(let r=0; r<s; r++) {
                         const pt = getPt(r, c);
                         if (pt.dist <= 1.0) {
-                            if (!hasPoints) { ctx.moveTo(pt.x, pt.y); hasPoints = true; }
-                            else { ctx.lineTo(pt.x, pt.y); }
-                        } else {
-                            hasPoints = false;
-                        }
-                    }
-                    ctx.stroke();
-                }
-                
-                ctx.restore();
-            }
+            // Highlighting configured proximity arc limit on the plane
+            const distLimitPx = Math.min((config.distLimit / 30) * maxR, maxR);
+            ctx.strokeStyle = fovEdge;
+            ctx.lineWidth = 4;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = 'rgba(59, 130, 246, 0.8)';
+            ctx.beginPath();
+            ctx.arc(0, 0, distLimitPx, fovStart, fovEnd);
+            ctx.stroke();
 
-            // --- 3. Draw Player Ship (Center Chevron) ---
+            ctx.restore();
+
+            // --- 2. Draw Player Ship (Center Chevron) ---
             ctx.shadowBlur = 20;
             ctx.shadowColor = gridBright;
             ctx.fillStyle = gridBright;
@@ -724,7 +627,7 @@
             ctx.fill();
             ctx.shadowBlur = 0;
 
-            // --- 4. Calculate & Sort Planes (Back-to-Front Depth Sorting) ---
+            // --- 3. Calculate & Sort Planes (Back-to-Front Depth Sorting) ---
             const radarMaxDistNM = 30; 
             let renderItems = [];
 
@@ -739,8 +642,8 @@
                 const by = cy + Math.sin(angle) * r * tilt; 
 
                 // Altitude stalk (0 to 40,000 feet mapped to pixels)
-                // Scaled up for the larger canvas
-                const stalkLen = Math.min((p.alt_baro / 40000) * 220, 280); 
+                // Scaled down significantly so planes at the back edge fit on canvas
+                const stalkLen = Math.min((p.alt_baro / 40000) * 130, 150); 
                 
                 renderItems.push({
                     plane: p,
@@ -755,7 +658,7 @@
             // Sort so planes further "back" on the grid are drawn first
             renderItems.sort((a, b) => a.depth - b.depth);
 
-            // --- 5. Render Planes (Holographic Style) ---
+            // --- 4. Render Planes (Holographic Style) ---
 
             renderItems.forEach(item => {
                 const { plane: p, bx, by, px, py, inView } = item;
