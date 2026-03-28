@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkyWatcher ADS-B Auto-Capture</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+            border-radius: 12px;
+            overflow: hidden;
+            background: #000;
+        }
+        #camera-feed {
+            width: 100%;
+            height: auto;
+            transform: scaleX(1); /* Set to -1 if you want mirrored, but for sky usually 1 */
+        }
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            border: 2px dashed rgba(255, 255, 0, 0.5);
+        }
+        .plane-marker {
+            position: absolute;
+            background: rgba(255, 0, 0, 0.6);
+            color: white;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-size: 10px;
+            white-space: nowrap;
+        }
+        #gallery img {
+            width: 150px;
+            height: 100px;
+            object-fit: cover;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        #gallery img:hover {
+            transform: scale(1.05);
+        }
+        .log-entry {
+            font-family: monospace;
+            font-size: 12px;
+            border-bottom: 1px solid #eee;
+            padding: 2px 0;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-4">
+
+    <div class="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- Left Column: Camera & Controls -->
+        <div class="lg:col-span-2 space-y-4">
+            <header class="flex justify-between items-center">
+                <h1 class="text-2xl font-bold text-blue-400">SkyWatcher <span class="text-sm font-normal text-slate-400">ADS-B Auto-Snap</span></h1>
+                <div id="status-tag" class="px-3 py-1 rounded-full text-xs bg-red-900 text-red-200">Disconnected</div>
+            </header>
+
+            <div class="video-container shadow-2xl">
+                <video id="camera-feed" autoplay playsinline></video>
+                <canvas id="overlay-canvas" class="overlay"></canvas>
+                <div id="capture-flash" class="absolute inset-0 bg-white opacity-0 pointer-events-none transition-opacity duration-100"></div>
+            </div>
+
+            <div class="bg-slate-800 p-4 rounded-xl space-y-4">
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">DUMP1090 IP:PORT</label>
+                        <input id="dump-ip" type="text" value="192.168.50.100:8080" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Your Lat</label>
+                        <input id="my-lat" type="number" step="0.000001" value="54.531911" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Your Lon</label>
+                        <input id="my-lon" type="number" step="0.000001" value="-1.087992" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Cam Azimuth (East=90)</label>
+                        <input id="cam-az" type="number" value="90" class="w-full bg-slate-700 p-2 rounded text-sm">
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap gap-4 pt-2">
+                    <button id="btn-start" class="bg-blue-600 hover:bg-blue-500 px-6 py-2 rounded font-bold transition">Start Monitoring</button>
+                    <button id="btn-manual" class="bg-slate-600 hover:bg-slate-500 px-6 py-2 rounded font-bold transition">Manual Snap</button>
+                    <div class="flex items-center gap-2">
+                        <input type="checkbox" id="auto-snap" checked>
+                        <label for="auto-snap" class="text-sm">Auto-Snap Enabled</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Data & Logs -->
+        <div class="space-y-4">
+            <div class="bg-slate-800 p-4 rounded-xl h-[400px] flex flex-col">
+                <div class="flex justify-between items-center border-b border-slate-700 pb-2 mb-2">
+                    <h3 class="font-bold">Visible Planes</h3>
+                    <div id="data-status" class="px-2 py-1 rounded-full text-[10px] bg-slate-700 text-slate-400">Data: Standby</div>
+                </div>
+                <div id="plane-list" class="flex-1 overflow-y-auto space-y-2">
+                    <p class="text-slate-500 text-sm italic">Waiting for data...</p>
+                </div>
+            </div>
+
+            <div class="bg-slate-800 p-4 rounded-xl h-[300px] flex flex-col">
+                <h3 class="font-bold border-b border-slate-700 pb-2 mb-2">Event Log</h3>
+                <div id="log" class="flex-1 overflow-y-auto text-xs text-slate-300">
+                    <div class="log-entry">System ready.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gallery Section -->
+    <div class="max-w-6xl mx-auto mt-6 bg-slate-800 p-6 rounded-xl">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-xl font-bold">Captured Photos</h2>
+            <button id="btn-clear-gallery" class="text-xs text-red-400 hover:underline">Clear All</button>
+        </div>
+        <div id="gallery" class="flex flex-wrap gap-4">
+            <!-- Photos appear here -->
+        </div>
+    </div>
+
+    <script>
+        // State
+        let config = {
+            ip: '192.168.50.100:8080',
+            lat: 54.531911,
+            lon: -1.087992,
+            camAzimuth: 90, // Facing East
+            fovH: 60,       // Estimated Horizontal FOV of webcam
+            fovV: 40,       // Estimated Vertical FOV
+            distLimit: 10,  // Nautical miles
+            pollInterval: 1000,
+            autoSnap: true
+        };
+
+        const elements = {
+            video: document.getElementById('camera-feed'),
+            planeList: document.getElementById('plane-list'),
+            log: document.getElementById('log'),
+            status: document.getElementById('status-tag'),
+            gallery: document.getElementById('gallery'),
+            flash: document.getElementById('capture-flash')
+        };
+
+        let activePlanes = [];
+        let capturedHex = new Set(); // Prevent spamming same plane
+        let stream = null;
+
+        // --- Initialization ---
+
+        window.onload = async () => {
+            setupCamera();
+            
+            document.getElementById('btn-start').onclick = toggleMonitoring;
+            document.getElementById('btn-manual').onclick = () => takeSnap('MANUAL');
+            document.getElementById('btn-clear-gallery').onclick = () => elements.gallery.innerHTML = '';
+        };
+
+        async function setupCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                        facingMode: "environment" 
+                    } 
+                });
+                elements.video.srcObject = stream;
+                addLog("Camera initialized.");
+            } catch (err) {
+                addLog("Camera error: " + err.message);
+                console.error(err);
+            }
+        }
+
+        // --- Core Logic ---
+
+        let monitorTimer = null;
+        let isDataConnected = null;
+
+        function toggleMonitoring() {
+            if (monitorTimer) {
+                clearInterval(monitorTimer);
+                monitorTimer = null;
+                elements.status.innerText = "Paused";
+                elements.status.className = "px-3 py-1 rounded-full text-xs bg-yellow-900 text-yellow-200";
+                document.getElementById('btn-start').innerText = "Start Monitoring";
+                addLog("Monitoring stopped.");
+            } else {
+                updateConfig();
+                monitorTimer = setInterval(fetchData, config.pollInterval);
+                elements.status.innerText = "Monitoring";
+                elements.status.className = "px-3 py-1 rounded-full text-xs bg-green-900 text-green-200";
+                document.getElementById('btn-start').innerText = "Stop Monitoring";
+                addLog("Monitoring started for " + config.ip);
+            }
+        }
+
+        function updateConfig() {
+            config.ip = document.getElementById('dump-ip').value;
+            config.lat = parseFloat(document.getElementById('my-lat').value);
+            config.lon = parseFloat(document.getElementById('my-lon').value);
+            config.camAzimuth = parseFloat(document.getElementById('cam-az').value);
+            config.autoSnap = document.getElementById('auto-snap').checked;
+        }
+
+        async function fetchData() {
+            // Using a proxy or direct fetch. Note: dump1090 often needs a proxy if CORS isn't set.
+            // In a local environment, this usually works if the app is served from a similar origin.
+            const url = `http://${config.ip}/dump1090-fa/data/aircraft.json`;
+            
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error("Network response was not ok");
+                const data = await response.json();
+                updateDataStatus(true);
+                processPlanes(data.aircraft);
+            } catch (err) {
+                updateDataStatus(false, err.message);
+            }
+        }
+
+        function updateDataStatus(connected, errorMsg = "") {
+            const el = document.getElementById('data-status');
+            if (connected && isDataConnected !== true) {
+                isDataConnected = true;
+                el.innerText = "Data: Connected";
+                el.className = "px-2 py-1 rounded-full text-[10px] bg-green-900 text-green-200";
+                addLog("Data connection established.");
+            } else if (!connected && isDataConnected !== false) {
+                isDataConnected = false;
+                el.innerText = "Data: Disconnected";
+                el.className = "px-2 py-1 rounded-full text-[10px] bg-red-900 text-red-200";
+                addLog("Data connection error: " + (errorMsg || "Failed to fetch"));
+                elements.planeList.innerHTML = '<p class="text-slate-500 text-sm italic">Connection lost...</p>';
+            }
+        }
+
+        function processPlanes(aircraft) {
+            if (!aircraft) return;
+
+            const now = Date.now();
+            activePlanes = aircraft
+                .filter(p => p.lat && p.lon && p.alt_baro)
+                .map(p => {
+                    const pos = calculateRelative(p.lat, p.lon, p.alt_baro);
+                    return { ...p, ...pos };
+                });
+
+            renderPlaneList();
+            checkAutoSnap();
+        }
+
+        function calculateRelative(pLat, pLon, pAltFeet) {
+            const R = 6371; // Earth radius km
+            const dLat = (pLat - config.lat) * Math.PI / 180;
+            const dLon = (pLon - config.lon) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(config.lat * Math.PI / 180) * Math.cos(pLat * Math.PI / 180) *
+                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            const distanceKm = R * c;
+            const distanceNM = distanceKm * 0.539957;
+
+            // Bearing
+            const y = Math.sin(dLon) * Math.cos(pLat * Math.PI / 180);
+            const x = Math.cos(config.lat * Math.PI / 180) * Math.sin(pLat * Math.PI / 180) -
+                      Math.sin(config.lat * Math.PI / 180) * Math.cos(pLat * Math.PI / 180) * Math.cos(dLon);
+            let bearing = Math.atan2(y, x) * 180 / Math.PI;
+            bearing = (bearing + 360) % 360;
+
+            // Elevation angle
+            const altKm = pAltFeet * 0.0003048;
+            const elevation = Math.atan2(altKm, distanceKm) * 180 / Math.PI;
+
+            return { distanceNM, bearing, elevation };
+        }
+
+        function renderPlaneList() {
+            elements.planeList.innerHTML = '';
+            
+            // Sort by distance
+            activePlanes.sort((a, b) => a.distanceNM - b.distanceNM);
+
+            activePlanes.forEach(p => {
+                const isVisible = isPlaneInView(p);
+                const div = document.createElement('div');
+                div.className = `p-2 rounded text-sm flex justify-between items-center ${isVisible ? 'bg-blue-900 border border-blue-500' : 'bg-slate-700'}`;
+                div.innerHTML = `
+                    <div>
+                        <span class="font-bold">${p.flight || p.hex.toUpperCase()}</span>
+                        <div class="text-[10px] text-slate-400">Alt: ${p.alt_baro}ft | Dist: ${p.distanceNM.toFixed(1)}nm</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-[10px]">Brg: ${Math.round(p.bearing)}°</div>
+                        <div class="text-[10px]">Elev: ${Math.round(p.elevation)}°</div>
+                    </div>
+                `;
+                elements.planeList.appendChild(div);
+            });
+
+            if (activePlanes.length === 0) {
+                elements.planeList.innerHTML = '<p class="text-slate-500 text-sm italic">No planes with GPS data...</p>';
+            }
+        }
+
+        function isPlaneInView(p) {
+            // Horizontal check
+            let azDiff = p.bearing - config.camAzimuth;
+            if (azDiff > 180) azDiff -= 360;
+            if (azDiff < -180) azDiff += 360;
+
+            const inAz = Math.abs(azDiff) < (config.fovH / 2);
+            // Elevation check (Assuming camera is tilted roughly 30-45 degrees up)
+            const inEl = p.elevation > 5 && p.elevation < 80; 
+            const closeEnough = p.distanceNM < 8; // Adjust based on lens
+
+            return inAz && inEl && closeEnough;
+        }
+
+        function checkAutoSnap() {
+            if (!config.autoSnap) return;
+
+            activePlanes.forEach(p => {
+                if (isPlaneInView(p) && !capturedHex.has(p.hex)) {
+                    takeSnap(p.flight ? p.flight.trim() : p.hex.toUpperCase(), p);
+                    capturedHex.add(p.hex);
+                    // Clear from memory after 5 minutes so we can snap it again if it orbits
+                    setTimeout(() => capturedHex.delete(p.hex), 300000);
+                }
+            });
+        }
+
+        function takeSnap(label, planeData = null) {
+            const canvas = document.createElement('canvas');
+            canvas.width = elements.video.videoWidth;
+            canvas.height = elements.video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            
+            // Draw video frame
+            ctx.drawImage(elements.video, 0, 0, canvas.width, canvas.height);
+            
+            // Add Timestamp & Label
+            ctx.fillStyle = "rgba(0,0,0,0.5)";
+            ctx.fillRect(10, canvas.height - 60, 300, 50);
+            ctx.fillStyle = "white";
+            ctx.font = "20px Arial";
+            const timeStr = new Date().toLocaleTimeString();
+            ctx.fillText(`${label} - ${timeStr}`, 20, canvas.height - 35);
+            if (planeData) {
+                ctx.font = "14px Arial";
+                ctx.fillText(`Alt: ${planeData.alt_baro}ft | Dist: ${planeData.distanceNM.toFixed(1)}nm`, 20, canvas.height - 15);
+            }
+
+            const dataUrl = canvas.toDataURL('image/jpeg');
+            saveToGallery(dataUrl, label);
+            
+            // UI Feedback
+            elements.flash.style.opacity = "1";
+            setTimeout(() => elements.flash.style.opacity = "0", 100);
+            addLog(`Captured: ${label}`);
+        }
+
+        function saveToGallery(dataUrl, label) {
+            const img = document.createElement('img');
+            img.src = dataUrl;
+            img.title = label;
+            img.onclick = () => {
+                const link = document.createElement('a');
+                link.href = dataUrl;
+                link.download = `SkySnap_${label}_${Date.now()}.jpg`;
+                link.click();
+            };
+            elements.gallery.prepend(img);
+        }
+
+        function addLog(msg) {
+            const entry = document.createElement('div');
+            entry.className = "log-entry";
+            entry.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            elements.log.prepend(entry);
+            if (elements.log.children.length > 50) elements.log.lastChild.remove();
+        }
+    </script>
+</body>
+</html>
