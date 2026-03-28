@@ -142,33 +142,33 @@
                     </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Right Column: Data & Logs -->
-        <div class="space-y-4">
             
-            <!-- Elite-Style Airspace Scanner -->
+            <!-- MOVED & ENLARGED: Elite-Style Airspace Scanner -->
             <div class="bg-slate-800 p-4 rounded-xl flex flex-col items-center shadow-xl">
                 <div class="w-full flex justify-between items-center border-b border-slate-700 pb-2 mb-2">
-                    <h3 class="font-bold text-blue-400">Scanner</h3>
+                    <h3 class="font-bold text-blue-400">Airspace Scanner</h3>
                     <div class="flex gap-2">
                         <div id="weather-status" class="px-2 py-1 rounded-full text-[10px] bg-slate-700 text-slate-400 hidden sm:block">Weather: Standby</div>
                         <div id="data-status" class="px-2 py-1 rounded-full text-[10px] bg-slate-700 text-slate-400">Data: Standby</div>
                     </div>
                 </div>
                 <div class="flex justify-center w-full pt-2">
-                    <canvas id="radar-canvas" width="260" height="240" class="bg-slate-900 rounded-xl border-2 border-slate-700 shadow-inner"></canvas>
+                    <canvas id="radar-canvas" width="800" height="500" class="w-full h-auto bg-slate-900 rounded-xl border-2 border-slate-700 shadow-inner"></canvas>
                 </div>
             </div>
+        </div>
 
-            <div class="bg-slate-800 p-4 rounded-xl h-[250px] flex flex-col">
+        <!-- Right Column: Data & Logs -->
+        <div class="space-y-4">
+            
+            <div class="bg-slate-800 p-4 rounded-xl h-[500px] flex flex-col">
                 <h3 class="font-bold border-b border-slate-700 pb-2 mb-2">Visible Planes</h3>
                 <div id="plane-list" class="flex-1 overflow-y-auto space-y-2">
                     <p class="text-slate-500 text-sm italic">Waiting for data...</p>
                 </div>
             </div>
 
-            <div class="bg-slate-800 p-4 rounded-xl h-[200px] flex flex-col">
+            <div class="bg-slate-800 p-4 rounded-xl h-[350px] flex flex-col">
                 <h3 class="font-bold border-b border-slate-700 pb-2 mb-2">Event Log</h3>
                 <div id="log" class="flex-1 overflow-y-auto text-xs text-slate-300">
                     <div class="log-entry">System ready.</div>
@@ -466,8 +466,8 @@
             const h = canvas.height;
             // Shift center down slightly so tall altitude stalks don't clip out the top
             const cx = w / 2;
-            const cy = h / 2 + 30; 
-            const maxR = (w / 2) - 15; 
+            const cy = h / 2 + 60; 
+            const maxR = (w / 2) - 40; 
             const tilt = 0.45; // Isometric squash factor
 
             ctx.clearRect(0, 0, w, h);
@@ -488,15 +488,15 @@
             ctx.shadowColor = 'rgba(255, 140, 0, 0.5)';
 
             // Radar Rings with varying styles
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = 2;
             for(let i=1; i<=5; i++) {
                 ctx.beginPath();
                 ctx.strokeStyle = i === 5 ? gridBright : gridColor;
                 if (i === 5) {
-                    ctx.setLineDash([4, 6]); // Outer dashed ring
-                    ctx.lineWidth = 2;
+                    ctx.setLineDash([8, 12]); // Outer dashed ring
+                    ctx.lineWidth = 3;
                 } else if (i === 3) {
-                    ctx.setLineDash([2, 4]); // Middle dashed ring
+                    ctx.setLineDash([4, 8]); // Middle dashed ring
                 } else {
                     ctx.setLineDash([]); // Solid rings
                 }
@@ -506,7 +506,7 @@
             ctx.setLineDash([]); // Reset dash
 
             // Radial Crosshairs (8 segments)
-            ctx.lineWidth = 1;
+            ctx.lineWidth = 2;
             ctx.strokeStyle = gridColor;
             for(let i=0; i<8; i++) {
                 const angle = (i * Math.PI) / 4;
@@ -531,8 +531,8 @@
             // Highlight the configured proximity arc limit on the plane
             const distLimitPx = Math.min((config.distLimit / 30) * maxR, maxR);
             ctx.strokeStyle = fovEdge;
-            ctx.lineWidth = 3;
-            ctx.shadowBlur = 10;
+            ctx.lineWidth = 4;
+            ctx.shadowBlur = 15;
             ctx.shadowColor = 'rgba(59, 130, 246, 0.8)';
             ctx.beginPath();
             ctx.arc(0, 0, distLimitPx, fovStart, fovEnd);
@@ -541,14 +541,14 @@
             ctx.restore();
 
             // --- 2. Draw Player Ship (Center Chevron) ---
-            ctx.shadowBlur = 15;
+            ctx.shadowBlur = 20;
             ctx.shadowColor = gridBright;
             ctx.fillStyle = gridBright;
             ctx.beginPath();
-            ctx.moveTo(cx, cy - 8);
-            ctx.lineTo(cx + 6, cy + 6);
-            ctx.lineTo(cx, cy + 2);
-            ctx.lineTo(cx - 6, cy + 6);
+            ctx.moveTo(cx, cy - 14);
+            ctx.lineTo(cx + 10, cy + 10);
+            ctx.lineTo(cx, cy + 4);
+            ctx.lineTo(cx - 10, cy + 10);
             ctx.closePath();
             ctx.fill();
             ctx.shadowBlur = 0;
@@ -568,7 +568,8 @@
                 const by = cy + Math.sin(angle) * r * tilt; 
 
                 // Altitude stalk (0 to 40,000 feet mapped to pixels)
-                const stalkLen = Math.min((p.alt_baro / 40000) * 85, 120); 
+                // Scaled up for the larger canvas
+                const stalkLen = Math.min((p.alt_baro / 40000) * 220, 280); 
                 
                 renderItems.push({
                     plane: p,
@@ -598,16 +599,16 @@
                 ctx.fillStyle = baseColor;
                 ctx.beginPath();
                 if(ctx.ellipse) {
-                    ctx.ellipse(bx, by, 6, 6 * tilt, 0, 0, Math.PI * 2);
+                    ctx.ellipse(bx, by, 10, 10 * tilt, 0, 0, Math.PI * 2);
                 } else {
-                    ctx.arc(bx, by, 4, 0, Math.PI*2); 
+                    ctx.arc(bx, by, 6, 0, Math.PI*2); 
                 }
                 ctx.fill();
 
                 // Holographic Segmented Stalk Line
                 ctx.strokeStyle = stalkColor;
-                ctx.lineWidth = inView ? 2 : 1.5;
-                ctx.setLineDash([2, 2]); 
+                ctx.lineWidth = inView ? 3 : 2;
+                ctx.setLineDash([4, 4]); 
                 ctx.beginPath();
                 ctx.moveTo(bx, by);
                 ctx.lineTo(px, py);
@@ -615,16 +616,16 @@
                 ctx.setLineDash([]);
 
                 // Blip Glow Effect
-                ctx.shadowBlur = inView ? 20 : 8;
+                ctx.shadowBlur = inView ? 25 : 12;
                 ctx.shadowColor = blipColor;
 
                 // Blip (Sci-Fi Diamond Shape)
                 ctx.fillStyle = blipColor;
                 ctx.beginPath();
-                ctx.moveTo(px, py - 4);
-                ctx.lineTo(px + 4, py);
-                ctx.lineTo(px, py + 4);
-                ctx.lineTo(px - 4, py);
+                ctx.moveTo(px, py - 6);
+                ctx.lineTo(px + 6, py);
+                ctx.lineTo(px, py + 6);
+                ctx.lineTo(px - 6, py);
                 ctx.closePath();
                 ctx.fill();
                 
@@ -632,19 +633,19 @@
                 if (p.track !== undefined) {
                     const trackRad = (p.track - 90) * Math.PI / 180;
                     ctx.strokeStyle = blipColor;
-                    ctx.lineWidth = 1.5;
+                    ctx.lineWidth = 2.5;
                     ctx.beginPath();
                     ctx.moveTo(px, py);
                     // Apply isometric tilt to the heading vector
-                    ctx.lineTo(px + Math.cos(trackRad)*12, py + Math.sin(trackRad)*12*tilt);
+                    ctx.lineTo(px + Math.cos(trackRad)*20, py + Math.sin(trackRad)*20*tilt);
                     ctx.stroke();
                 }
 
                 // Target Lock Brackets for planes in FOV
                 if (inView) {
                     ctx.strokeStyle = 'rgba(239, 68, 68, 0.9)';
-                    ctx.lineWidth = 1.5;
-                    const s = 9; // Fixed bracket size
+                    ctx.lineWidth = 2;
+                    const s = 14; // Fixed bracket size scaled up
                     
                     ctx.beginPath(); // Top-Left
                     ctx.moveTo(px-s, py-s/2); ctx.lineTo(px-s, py-s); ctx.lineTo(px-s/2, py-s); ctx.stroke();
@@ -660,8 +661,8 @@
 
                 // Flight Label
                 ctx.fillStyle = labelColor;
-                ctx.font = "bold 9px monospace";
-                ctx.fillText(p.flight ? p.flight.trim() : p.hex, px + 8, py + 4);
+                ctx.font = "bold 13px monospace";
+                ctx.fillText(p.flight ? p.flight.trim() : p.hex, px + 12, py + 5);
             });
         }
 
