@@ -112,10 +112,21 @@
             </div>
 
             <div class="bg-slate-800 p-4 rounded-xl space-y-4">
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-4">
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">Data Source</label>
+                        <select id="data-source" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
+                            <option value="dump1090">Local Dump1090</option>
+                            <option value="adsb_lol">ADSB.lol API</option>
+                        </select>
+                    </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">DUMP1090 IP:PORT</label>
                         <input id="dump-ip" type="text" value="192.168.50.100:8080" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">ADSB.lol Range (NM)</label>
+                        <input id="adsb-range" type="number" min="1" max="250" value="30" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
                     </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">Your Lat</label>
@@ -208,6 +219,8 @@
         // State
         let config = {
             ip: '192.168.50.100:8080',
+            dataSource: 'dump1090',
+            adsbRangeNm: 30,
             lat: 0,
             lon: 0,
             camAzimuth: 90, // Facing East
@@ -241,6 +254,8 @@
             mapOverlay: document.getElementById('map-overlay'),
             mapStyle: document.getElementById('map-style'),
             dumpIp: document.getElementById('dump-ip'),
+            sourceSelect: document.getElementById('data-source'),
+            adsbRange: document.getElementById('adsb-range'),
             myLat: document.getElementById('my-lat'),
             myLon: document.getElementById('my-lon'),
             camAz: document.getElementById('cam-az'),
@@ -290,6 +305,8 @@
             // Persist field/checkbox changes immediately
             [
                 elements.dumpIp,
+                elements.sourceSelect,
+                elements.adsbRange,
                 elements.myLat,
                 elements.myLon,
                 elements.camAz
@@ -394,7 +411,10 @@
                 elements.status.innerText = "Monitoring";
                 elements.status.className = "px-3 py-1 rounded-full text-xs bg-green-900 text-green-200";
                 document.getElementById('btn-start').innerText = "Stop Monitoring";
-                addLog("Monitoring started for " + config.ip);
+                const sourceLabel = config.dataSource === 'adsb_lol'
+                    ? `ADSB.lol (${config.adsbRangeNm}NM radius)`
+                    : `Dump1090 @ ${config.ip}`;
+                addLog("Monitoring started using " + sourceLabel);
             }
         }
 
@@ -406,6 +426,8 @@
             config.lon = newLon;
 
             config.ip = document.getElementById('dump-ip').value;
+            config.dataSource = elements.sourceSelect.value;
+            config.adsbRangeNm = Math.min(Math.max(parseFloat(elements.adsbRange.value) || 30, 1), 250);
             config.camAzimuth = parseFloat(document.getElementById('cam-az').value) || 90;
             config.distLimit = parseFloat(elements.distSlider.value);
             config.autoSnap = document.getElementById('auto-snap').checked;
@@ -448,6 +470,8 @@
             elements.myLat.value = config.lat || '';
             elements.myLon.value = config.lon || '';
             elements.dumpIp.value = config.ip || '';
+            elements.sourceSelect.value = config.dataSource || 'dump1090';
+            elements.adsbRange.value = config.adsbRangeNm || 30;
             elements.camAz.value = config.camAzimuth;
             elements.distSlider.value = config.distLimit;
             elements.distVal.innerText = String(config.distLimit);
@@ -460,6 +484,8 @@
 
         function saveSettings() {
             config.ip = elements.dumpIp.value;
+            config.dataSource = elements.sourceSelect.value;
+            config.adsbRangeNm = Math.min(Math.max(parseFloat(elements.adsbRange.value) || 30, 1), 250);
             config.lat = parseFloat(elements.myLat.value) || 0;
             config.lon = parseFloat(elements.myLon.value) || 0;
             config.camAzimuth = parseFloat(elements.camAz.value) || 90;
@@ -520,32 +546,50 @@
 
         // --- Data Fetching ---
         async function fetchData() {
-            const url = `http://${config.ip}/dump1090-fa/data/aircraft.json`;
+            let url = '';
+            let sourceName = 'Dump1090';
+            if (config.dataSource === 'adsb_lol') {
+                if (!config.lat || !config.lon) {
+                    updateDataStatus(false, "Set your Lat/Lon first for ADSB.lol");
+                    return;
+                }
+                sourceName = 'ADSB.lol';
+                url = `https://api.adsb.lol/v2/lat/${config.lat}/lon/${config.lon}/dist/${config.adsbRangeNm}`;
+            } else {
+                url = `http://${config.ip}/dump1090-fa/data/aircraft.json`;
+            }
             
             try {
                 const response = await fetch(url);
                 if (!response.ok) throw new Error("Network response was not ok");
                 const data = await response.json();
-                updateDataStatus(true);
-                processPlanes(data.aircraft);
+                const aircraft = Array.isArray(data.aircraft)
+                    ? data.aircraft
+                    : (Array.isArray(data.ac) ? data.ac : []);
+                updateDataStatus(true, '', sourceName);
+                processPlanes(aircraft);
             } catch (err) {
-                updateDataStatus(false, err.message);
+                updateDataStatus(false, err.message, sourceName);
             }
         }
 
-        function updateDataStatus(connected, errorMsg = "") {
+        function updateDataStatus(connected, errorMsg = "", sourceName = 'Data') {
             const el = document.getElementById('data-status');
-            if (connected && isDataConnected !== true) {
-                isDataConnected = true;
-                el.innerText = "Data: Connected";
+            if (connected) {
+                el.innerText = `Data: ${sourceName}`;
                 el.className = "px-2 py-1 rounded-full text-[10px] bg-green-900 text-green-200";
-                addLog("Data connection established.");
-            } else if (!connected && isDataConnected !== false) {
-                isDataConnected = false;
-                el.innerText = "Data: Disconnected";
+                if (isDataConnected !== true) {
+                    addLog(`Data connection established (${sourceName}).`);
+                }
+                isDataConnected = true;
+            } else if (!connected) {
+                el.innerText = `Data: ${sourceName} offline`;
                 el.className = "px-2 py-1 rounded-full text-[10px] bg-red-900 text-red-200";
-                addLog("Data connection error: " + (errorMsg || "Failed to fetch"));
-                elements.planeList.innerHTML = '<p class="text-slate-500 text-sm italic">Connection lost...</p>';
+                if (isDataConnected !== false) {
+                    addLog("Data connection error: " + (errorMsg || "Failed to fetch"));
+                    elements.planeList.innerHTML = '<p class="text-slate-500 text-sm italic">Connection lost...</p>';
+                }
+                isDataConnected = false;
             }
         }
 
