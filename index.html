@@ -140,17 +140,26 @@
 
         <!-- Right Column: Data & Logs -->
         <div class="space-y-4">
-            <div class="bg-slate-800 p-4 rounded-xl h-[400px] flex flex-col">
-                <div class="flex justify-between items-center border-b border-slate-700 pb-2 mb-2">
-                    <h3 class="font-bold">Visible Planes</h3>
+            
+            <!-- Elite-Style Airspace Scanner -->
+            <div class="bg-slate-800 p-4 rounded-xl flex flex-col items-center shadow-xl">
+                <div class="w-full flex justify-between items-center border-b border-slate-700 pb-2 mb-2">
+                    <h3 class="font-bold text-blue-400">Scanner</h3>
                     <div id="data-status" class="px-2 py-1 rounded-full text-[10px] bg-slate-700 text-slate-400">Data: Standby</div>
                 </div>
+                <div class="flex justify-center w-full pt-2">
+                    <canvas id="radar-canvas" width="240" height="240" class="bg-slate-900 rounded-full border-2 border-slate-700 shadow-inner"></canvas>
+                </div>
+            </div>
+
+            <div class="bg-slate-800 p-4 rounded-xl h-[250px] flex flex-col">
+                <h3 class="font-bold border-b border-slate-700 pb-2 mb-2">Visible Planes</h3>
                 <div id="plane-list" class="flex-1 overflow-y-auto space-y-2">
                     <p class="text-slate-500 text-sm italic">Waiting for data...</p>
                 </div>
             </div>
 
-            <div class="bg-slate-800 p-4 rounded-xl h-[300px] flex flex-col">
+            <div class="bg-slate-800 p-4 rounded-xl h-[200px] flex flex-col">
                 <h3 class="font-bold border-b border-slate-700 pb-2 mb-2">Event Log</h3>
                 <div id="log" class="flex-1 overflow-y-auto text-xs text-slate-300">
                     <div class="log-entry">System ready.</div>
@@ -196,7 +205,8 @@
             camErrorMsg: document.getElementById('camera-error-msg'),
             btnToggleCam: document.getElementById('btn-toggle-cam'),
             distSlider: document.getElementById('dist-slider'),
-            distVal: document.getElementById('dist-val')
+            distVal: document.getElementById('dist-val'),
+            radar: document.getElementById('radar-canvas')
         };
 
         let activePlanes = [];
@@ -371,7 +381,95 @@
                 });
 
             renderPlaneList();
+            drawRadar();
             checkAutoSnap();
+        }
+
+        function drawRadar() {
+            if (!elements.radar) return;
+            const canvas = elements.radar;
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width;
+            const h = canvas.height;
+            const cx = w / 2;
+            const cy = h / 2;
+            const maxR = Math.min(cx, cy) - 10; 
+
+            ctx.clearRect(0, 0, w, h);
+
+            // 1. Draw Radar Rings & Crosshairs
+            ctx.strokeStyle = '#334155'; // slate-700
+            ctx.lineWidth = 1;
+            for(let i=1; i<=3; i++) {
+                ctx.beginPath();
+                ctx.arc(cx, cy, maxR * (i/3), 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.beginPath();
+            ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
+            ctx.moveTo(0, cy); ctx.lineTo(w, cy);
+            ctx.stroke();
+
+            // 2. Draw Camera FOV Cone
+            // Note: Canvas arc starts at 3 o'clock (0 rad). Bearing 0 is 12 o'clock (-90 deg)
+            const fovStart = (config.camAzimuth - config.fovH/2 - 90) * Math.PI / 180;
+            const fovEnd = (config.camAzimuth + config.fovH/2 - 90) * Math.PI / 180;
+            ctx.fillStyle = 'rgba(59, 130, 246, 0.15)'; // faint blue cone
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.arc(cx, cy, maxR, fovStart, fovEnd);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Highlight the configured proximity arc limit
+            const distLimitPx = Math.min((config.distLimit / 30) * maxR, maxR);
+            ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, distLimitPx, fovStart, fovEnd);
+            ctx.stroke();
+
+            // 3. Draw Planes (Elite Dangerous Style)
+            const radarMaxDistNM = 30; // Lock radar scale to 30 NM radius
+            
+            activePlanes.forEach(p => {
+                if (p.distanceNM > radarMaxDistNM) return; // Off radar
+                
+                const r = (p.distanceNM / radarMaxDistNM) * maxR;
+                const angle = (p.bearing - 90) * Math.PI / 180;
+                const px = cx + Math.cos(angle) * r;
+                const py = cy + Math.sin(angle) * r;
+
+                const inView = isPlaneInView(p);
+                
+                // Elite Style stalk: Alt up to 40,000ft mapped to stalk length
+                const stalkLen = (p.alt_baro / 40000) * 30; 
+                
+                // Draw base dot on the radar plane
+                ctx.fillStyle = inView ? 'rgba(239, 68, 68, 0.4)' : 'rgba(148, 163, 184, 0.4)';
+                ctx.beginPath();
+                ctx.arc(px, py, 1.5, 0, Math.PI*2);
+                ctx.fill();
+
+                // Draw vertical stalk
+                ctx.strokeStyle = inView ? 'rgba(239, 68, 68, 0.6)' : 'rgba(148, 163, 184, 0.6)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(px, py);
+                ctx.lineTo(px, py - stalkLen);
+                ctx.stroke();
+
+                // Draw actual aircraft blip
+                ctx.fillStyle = inView ? '#ef4444' : '#94a3b8'; // Red if in view, slate if not
+                ctx.beginPath();
+                ctx.arc(px, py - stalkLen, 3, 0, Math.PI*2);
+                ctx.fill();
+                
+                // Flight label next to blip
+                ctx.fillStyle = inView ? '#fca5a5' : '#64748b';
+                ctx.font = "8px monospace";
+                ctx.fillText(p.flight ? p.flight.trim() : p.hex, px + 4, py - stalkLen + 3);
+            });
         }
 
         function calculateRelative(pLat, pLon, pAltFeet) {
