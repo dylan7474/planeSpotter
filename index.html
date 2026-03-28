@@ -162,7 +162,10 @@
         <div class="space-y-4">
             
             <div class="bg-slate-800 p-4 rounded-xl h-[500px] flex flex-col">
-                <h3 class="font-bold border-b border-slate-700 pb-2 mb-2">Visible Planes</h3>
+                <div class="flex justify-between items-center border-b border-slate-700 pb-2 mb-2">
+                    <h3 class="font-bold">Visible Planes</h3>
+                    <button id="btn-toggle-list" class="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-[10px] text-slate-300 transition">Show: All</button>
+                </div>
                 <div id="plane-list" class="flex-1 overflow-y-auto space-y-2">
                     <p class="text-slate-500 text-sm italic">Waiting for data...</p>
                 </div>
@@ -200,7 +203,8 @@
             distLimit: 10,  // Nautical miles
             pollInterval: 1000,
             autoSnap: true,
-            snapClearOnly: true
+            snapClearOnly: true,
+            showRadarOnly: false
         };
 
         const elements = {
@@ -217,7 +221,8 @@
             distSlider: document.getElementById('dist-slider'),
             distVal: document.getElementById('dist-val'),
             radar: document.getElementById('radar-canvas'),
-            weatherStatus: document.getElementById('weather-status')
+            weatherStatus: document.getElementById('weather-status'),
+            btnToggleList: document.getElementById('btn-toggle-list')
         };
 
         let activePlanes = [];
@@ -235,6 +240,7 @@
             document.getElementById('btn-manual').onclick = () => takeSnap('MANUAL');
             document.getElementById('btn-clear-gallery').onclick = () => elements.gallery.innerHTML = '';
             elements.btnToggleCam.onclick = toggleCameraPreview;
+            elements.btnToggleList.onclick = togglePlaneList;
             
             // Proximity slider listener
             elements.distSlider.addEventListener('input', (e) => {
@@ -256,6 +262,12 @@
                 elements.camContainer.classList.add('hidden');
                 elements.btnToggleCam.innerText = 'Test Camera';
             }
+        }
+
+        function togglePlaneList() {
+            config.showRadarOnly = !config.showRadarOnly;
+            elements.btnToggleList.innerText = config.showRadarOnly ? "Show: Radar Only" : "Show: All";
+            renderPlaneList();
         }
 
         async function setupCamera() {
@@ -694,10 +706,15 @@
         function renderPlaneList() {
             elements.planeList.innerHTML = '';
             
+            let planesToRender = activePlanes;
+            if (config.showRadarOnly) {
+                planesToRender = activePlanes.filter(p => p.distanceNM <= 30); // 30NM is radar max radius
+            }
+            
             // Sort by distance
-            activePlanes.sort((a, b) => a.distanceNM - b.distanceNM);
+            planesToRender.sort((a, b) => a.distanceNM - b.distanceNM);
 
-            activePlanes.forEach(p => {
+            planesToRender.forEach(p => {
                 const isVisible = isPlaneInView(p);
                 const div = document.createElement('div');
                 div.className = `p-2 rounded text-sm flex justify-between items-center ${isVisible ? 'bg-blue-900 border border-blue-500' : 'bg-slate-700'}`;
@@ -714,8 +731,8 @@
                 elements.planeList.appendChild(div);
             });
 
-            if (activePlanes.length === 0) {
-                elements.planeList.innerHTML = '<p class="text-slate-500 text-sm italic">No planes with GPS data...</p>';
+            if (planesToRender.length === 0) {
+                elements.planeList.innerHTML = '<p class="text-slate-500 text-sm italic">No planes match filters...</p>';
             }
         }
 
