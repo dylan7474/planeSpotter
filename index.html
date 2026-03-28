@@ -762,6 +762,17 @@
             ctx.fillText('W', -maxR + 8, 5);
             ctx.fillText('E', maxR - 18, 5);
 
+            // Home-location map pin at exact radar center
+            ctx.fillStyle = 'rgba(125, 211, 252, 0.9)';
+            ctx.beginPath();
+            ctx.arc(0, 0, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(125, 211, 252, 0.8)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(0, 0, 9, 0, Math.PI * 2);
+            ctx.stroke();
+
             ctx.restore();
 
             // Center coordinate label (outside tilt transform so text stays crisp)
@@ -780,50 +791,77 @@
             if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { canvas: null };
 
             const targetPx = 640;
-            const lonScale = Math.cos(lat * Math.PI / 180) || 1;
-            const lonDelta = radarMaxDistNM / (60 * Math.max(0.2, Math.abs(lonScale)));
-            const widthDeg = Math.max(0.05, lonDelta * 2);
-            const zoomEstimate = Math.round(Math.log2((360 * targetPx) / (widthDeg * 256)));
-            const zoom = Math.min(14, Math.max(6, zoomEstimate));
-            const worldTiles = 2 ** zoom;
-
-            const xCenter = ((lon + 180) / 360) * worldTiles;
             const safeLat = Math.max(-85.0511, Math.min(85.0511, lat));
             const latRad = safeLat * Math.PI / 180;
-            const yCenter = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * worldTiles;
+            const metersPerNm = 1852;
+            const radarMeters = radarMaxDistNM * metersPerNm;
+            const radiusPx = targetPx / 2;
+            const cosLat = Math.max(0.2, Math.cos(latRad));
+            const metersPerPixelTarget = radarMeters / radiusPx;
+            const zoomEstimate = Math.log2((156543.03392 * cosLat) / metersPerPixelTarget);
+            const zoom = Math.min(14, Math.max(6, Math.round(zoomEstimate)));
+            const worldTiles = 2 ** zoom;
+            const worldPx = worldTiles * 256;
+            const metersPerPixelActual = (156543.03392 * cosLat) / (2 ** zoom);
+            const halfSpanPx = radarMeters / metersPerPixelActual;
 
-            const tilesAcross = Math.ceil(targetPx / 256) + 2;
-            const xStart = Math.floor(xCenter - tilesAcross / 2);
-            const yStart = Math.floor(yCenter - tilesAcross / 2);
+            const xCenterPx = ((lon + 180) / 360) * worldPx;
+            const yCenterPx = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * worldPx;
 
-            const canvas = document.createElement('canvas');
-            canvas.width = targetPx;
-            canvas.height = targetPx;
-            const mapCtx = canvas.getContext('2d');
+            const tilesAcross = Math.ceil((halfSpanPx * 2) / 256) + 4;
+            const tileCenterX = Math.floor(xCenterPx / 256);
+            const tileCenterY = Math.floor(yCenterPx / 256);
+            const xStartTile = tileCenterX - Math.floor(tilesAcross / 2);
+            const yStartTile = tileCenterY - Math.floor(tilesAcross / 2);
 
-            mapCtx.fillStyle = '#0f172a';
-            mapCtx.fillRect(0, 0, targetPx, targetPx);
+            const stitchedCanvas = document.createElement('canvas');
+            stitchedCanvas.width = tilesAcross * 256;
+            stitchedCanvas.height = tilesAcross * 256;
+            const stitchedCtx = stitchedCanvas.getContext('2d');
+            stitchedCtx.fillStyle = '#0f172a';
+            stitchedCtx.fillRect(0, 0, stitchedCanvas.width, stitchedCanvas.height);
+
+            const startWorldPxX = xStartTile * 256;
+            const startWorldPxY = yStartTile * 256;
 
             let loadedTileCount = 0;
-            const pixelOriginX = (xCenter - tilesAcross / 2) * 256;
-            const pixelOriginY = (yCenter - tilesAcross / 2) * 256;
 
             for (let yi = 0; yi < tilesAcross; yi++) {
-                const tileY = yStart + yi;
+                const tileY = yStartTile + yi;
                 if (tileY < 0 || tileY >= worldTiles) continue;
 
                 for (let xi = 0; xi < tilesAcross; xi++) {
-                    const tileX = ((xStart + xi) % worldTiles + worldTiles) % worldTiles;
+                    const tileX = ((xStartTile + xi) % worldTiles + worldTiles) % worldTiles;
                     const tileKey = `${zoom}/${tileX}/${tileY}`;
                     const tileImg = getOrQueueTile(tileKey);
 
                     if (!tileImg || !tileImg.complete || tileImg.naturalWidth === 0) continue;
 
                     loadedTileCount++;
-                    const dx = (tileX * 256) - pixelOriginX;
-                    const dy = (tileY * 256) - pixelOriginY;
-                    mapCtx.drawImage(tileImg, dx, dy, 256, 256);
+                    const rawWorldTileX = xStartTile + xi;
+                    const tileWorldPxX = rawWorldTileX * 256;
+                    const wrapDeltaPx = (tileX - rawWorldTileX) * 256;
+                    const dx = tileWorldPxX - startWorldPxX + wrapDeltaPx;
+                    const dy = yi * 256;
+                    stitchedCtx.drawImage(tileImg, dx, dy, 256, 256);
                 }
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = targetPx;
+            canvas.height = targetPx;
+            const mapCtx = canvas.getContext('2d');
+            mapCtx.fillStyle = '#0f172a';
+            mapCtx.fillRect(0, 0, targetPx, targetPx);
+
+            const centerInStitchedX = xCenterPx - startWorldPxX;
+            const centerInStitchedY = yCenterPx - startWorldPxY;
+            const srcX = centerInStitchedX - halfSpanPx;
+            const srcY = centerInStitchedY - halfSpanPx;
+            const srcSize = halfSpanPx * 2;
+
+            if (loadedTileCount > 0 && srcSize > 0) {
+                mapCtx.drawImage(stitchedCanvas, srcX, srcY, srcSize, srcSize, 0, 0, targetPx, targetPx);
             }
 
             return {
