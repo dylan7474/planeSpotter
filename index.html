@@ -157,6 +157,15 @@
                             <input type="checkbox" id="map-overlay" checked>
                             <label for="map-overlay" class="text-xs text-slate-400">Map overlay</label>
                         </div>
+                        <div class="flex items-center gap-2">
+                            <label for="map-style" class="text-xs text-slate-400">Map style</label>
+                            <select id="map-style" class="bg-slate-700 border border-slate-600 text-xs rounded px-1 py-0.5 text-slate-200">
+                                <option value="carto_dark_nolabels">Dark (no labels)</option>
+                                <option value="carto_dark_labels">Dark (with labels)</option>
+                                <option value="carto_light">Light</option>
+                                <option value="osm_standard">OSM standard</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -209,7 +218,8 @@
             autoSnap: true,
             snapClearOnly: true,
             showRadarOnly: false,
-            mapOverlay: true
+            mapOverlay: true,
+            mapStyle: 'carto_dark_nolabels'
         };
 
         const elements = {
@@ -229,6 +239,7 @@
             weatherStatus: document.getElementById('weather-status'),
             btnToggleList: document.getElementById('btn-toggle-list'),
             mapOverlay: document.getElementById('map-overlay'),
+            mapStyle: document.getElementById('map-style'),
             dumpIp: document.getElementById('dump-ip'),
             myLat: document.getElementById('my-lat'),
             myLon: document.getElementById('my-lon'),
@@ -259,6 +270,11 @@
             elements.btnToggleList.onclick = togglePlaneList;
             elements.mapOverlay.addEventListener('change', (e) => {
                 config.mapOverlay = e.target.checked;
+                saveSettings();
+                drawRadar();
+            });
+            elements.mapStyle.addEventListener('change', (e) => {
+                config.mapStyle = e.target.value;
                 saveSettings();
                 drawRadar();
             });
@@ -395,6 +411,7 @@
             config.autoSnap = document.getElementById('auto-snap').checked;
             config.snapClearOnly = document.getElementById('snap-clear-only').checked;
             config.mapOverlay = document.getElementById('map-overlay').checked;
+            config.mapStyle = elements.mapStyle.value;
             saveSettings();
         }
 
@@ -417,6 +434,7 @@
             const savedAz = localStorage.getItem('skywatcher_az');
             const savedClear = localStorage.getItem('skywatcher_clear');
             const savedMapOverlay = localStorage.getItem('skywatcher_map_overlay');
+            const savedMapStyle = localStorage.getItem('skywatcher_map_style');
 
             if (savedLat && !savedConfigRaw) config.lat = parseFloat(savedLat);
             if (savedLon && !savedConfigRaw) config.lon = parseFloat(savedLon);
@@ -424,6 +442,7 @@
             if (savedAz && !savedConfigRaw) config.camAzimuth = parseFloat(savedAz);
             if (savedClear !== null && !savedConfigRaw) config.snapClearOnly = savedClear === 'true';
             if (savedMapOverlay !== null && !savedConfigRaw) config.mapOverlay = savedMapOverlay === 'true';
+            if (savedMapStyle && !savedConfigRaw) config.mapStyle = savedMapStyle;
 
             // Apply loaded settings to UI controls
             elements.myLat.value = config.lat || '';
@@ -435,6 +454,7 @@
             elements.autoSnap.checked = config.autoSnap;
             elements.snapClearOnly.checked = config.snapClearOnly;
             elements.mapOverlay.checked = config.mapOverlay;
+            elements.mapStyle.value = config.mapStyle;
             elements.btnToggleList.innerText = config.showRadarOnly ? "Show: Radar Only" : "Show: All";
         }
 
@@ -447,6 +467,7 @@
             config.autoSnap = elements.autoSnap.checked;
             config.snapClearOnly = elements.snapClearOnly.checked;
             config.mapOverlay = elements.mapOverlay.checked;
+            config.mapStyle = elements.mapStyle.value;
 
             localStorage.setItem('skywatcher_settings', JSON.stringify(config));
 
@@ -457,6 +478,7 @@
             localStorage.setItem('skywatcher_az', elements.camAz.value);
             localStorage.setItem('skywatcher_clear', elements.snapClearOnly.checked);
             localStorage.setItem('skywatcher_map_overlay', config.mapOverlay);
+            localStorage.setItem('skywatcher_map_style', config.mapStyle);
         }
 
         // --- Weather Logic (Open-Meteo) ---
@@ -830,7 +852,7 @@
                 ctx.fillText(label, cx - maxR + 8, cy + maxR * tilt + 18);
                 ctx.fillStyle = 'rgba(148, 163, 184, 0.7)';
                 ctx.font = '10px monospace';
-                ctx.fillText('Map tiles © OpenStreetMap contributors', cx - maxR + 8, cy + maxR * tilt + 32);
+                ctx.fillText(getMapStyleMeta(config.mapStyle).attribution, cx - maxR + 8, cy + maxR * tilt + 32);
             }
         }
 
@@ -880,7 +902,7 @@
                 for (let xi = 0; xi < tilesAcross; xi++) {
                     const tileX = ((xStartTile + xi) % worldTiles + worldTiles) % worldTiles;
                     const tileKey = `${zoom}/${tileX}/${tileY}`;
-                    const tileImg = getOrQueueTile(tileKey);
+                    const tileImg = getOrQueueTile(tileKey, config.mapStyle);
 
                     if (!tileImg || !tileImg.complete || tileImg.naturalWidth === 0) continue;
 
@@ -916,25 +938,48 @@
             };
         }
 
-        function getOrQueueTile(tileKey) {
-            if (mapTileState.cache.has(tileKey)) {
-                return mapTileState.cache.get(tileKey);
+        function getOrQueueTile(tileKey, styleKey) {
+            const cacheKey = `${styleKey}|${tileKey}`;
+            if (mapTileState.cache.has(cacheKey)) {
+                return mapTileState.cache.get(cacheKey);
             }
-            if (mapTileState.pending.has(tileKey)) return null;
+            if (mapTileState.pending.has(cacheKey)) return null;
 
-            mapTileState.pending.add(tileKey);
+            mapTileState.pending.add(cacheKey);
             const img = new Image();
             img.crossOrigin = 'anonymous';
             img.onload = () => {
-                mapTileState.cache.set(tileKey, img);
-                mapTileState.pending.delete(tileKey);
+                mapTileState.cache.set(cacheKey, img);
+                mapTileState.pending.delete(cacheKey);
                 drawRadar();
             };
             img.onerror = () => {
-                mapTileState.pending.delete(tileKey);
+                mapTileState.pending.delete(cacheKey);
             };
-            img.src = `https://tile.openstreetmap.org/${tileKey}.png`;
+            img.src = `${getMapStyleMeta(styleKey).urlBase}/${tileKey}.png`;
             return null;
+        }
+
+        function getMapStyleMeta(styleKey) {
+            const styles = {
+                osm_standard: {
+                    urlBase: 'https://tile.openstreetmap.org',
+                    attribution: 'Map © OpenStreetMap contributors'
+                },
+                carto_light: {
+                    urlBase: 'https://basemaps.cartocdn.com/light_all',
+                    attribution: 'Map © OpenStreetMap, © CARTO'
+                },
+                carto_dark_nolabels: {
+                    urlBase: 'https://basemaps.cartocdn.com/dark_nolabels',
+                    attribution: 'Map © OpenStreetMap, © CARTO'
+                },
+                carto_dark_labels: {
+                    urlBase: 'https://basemaps.cartocdn.com/dark_all',
+                    attribution: 'Map © OpenStreetMap, © CARTO'
+                }
+            };
+            return styles[styleKey] || styles.carto_dark_nolabels;
         }
 
         function formatCoord(value, kind) {
