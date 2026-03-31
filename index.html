@@ -121,8 +121,8 @@
                         </select>
                     </div>
                     <div>
-                        <label class="block text-xs text-slate-400 mb-1">DUMP1090 Host:Port (Optional)</label>
-                        <input id="dump-ip" type="text" value="" placeholder="Leave blank to use /dump1090-fa/ on this site" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
+                        <label class="block text-xs text-slate-400 mb-1">Dump1090 Proxy Path (Optional)</label>
+                        <input id="dump-ip" type="text" value="" placeholder="Default: dump1090-fa (same-origin proxy path)" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
                     </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">ADSB.lol Range (NM)</label>
@@ -218,7 +218,7 @@
     <script>
         // State
         let config = {
-            ip: '',
+            dumpPath: 'dump1090-fa',
             dataSource: 'dump1090',
             adsbRangeNm: 30,
             lat: 0,
@@ -414,7 +414,7 @@
                 document.getElementById('btn-start').innerText = "Stop Monitoring";
                 const sourceLabel = config.dataSource === 'adsb_lol'
                     ? `ADSB.lol (${config.adsbRangeNm}NM radius)`
-                    : `Dump1090 @ ${config.ip}`;
+                    : `Dump1090 via ${normalizeDumpPath(config.dumpPath)}`;
                 addLog("Monitoring started using " + sourceLabel);
             }
         }
@@ -426,7 +426,7 @@
             config.lat = newLat;
             config.lon = newLon;
 
-            config.ip = document.getElementById('dump-ip').value;
+            config.dumpPath = normalizeDumpPath(document.getElementById('dump-ip').value);
             config.dataSource = elements.sourceSelect.value;
             config.adsbRangeNm = Math.min(Math.max(parseFloat(elements.adsbRange.value) || 30, 1), 250);
             config.camAzimuth = parseFloat(document.getElementById('cam-az').value) || 90;
@@ -453,6 +453,7 @@
             // Backward compatibility with older individual keys
             const savedLat = localStorage.getItem('skywatcher_lat');
             const savedLon = localStorage.getItem('skywatcher_lon');
+            const savedDumpPath = localStorage.getItem('skywatcher_dump_path');
             const savedIp = localStorage.getItem('skywatcher_ip');
             const savedAz = localStorage.getItem('skywatcher_az');
             const savedClear = localStorage.getItem('skywatcher_clear');
@@ -461,7 +462,8 @@
 
             if (savedLat && !savedConfigRaw) config.lat = parseFloat(savedLat);
             if (savedLon && !savedConfigRaw) config.lon = parseFloat(savedLon);
-            if (savedIp && !savedConfigRaw) config.ip = savedIp;
+            if (savedDumpPath && !savedConfigRaw) config.dumpPath = savedDumpPath;
+            if (savedIp && !savedConfigRaw) config.dumpPath = savedIp;
             if (savedAz && !savedConfigRaw) config.camAzimuth = parseFloat(savedAz);
             if (savedClear !== null && !savedConfigRaw) config.snapClearOnly = savedClear === 'true';
             if (savedMapOverlay !== null && !savedConfigRaw) config.mapOverlay = savedMapOverlay === 'true';
@@ -470,7 +472,7 @@
             // Apply loaded settings to UI controls
             elements.myLat.value = config.lat || '';
             elements.myLon.value = config.lon || '';
-            elements.dumpIp.value = config.ip || '';
+            elements.dumpIp.value = normalizeDumpPath(config.dumpPath);
             elements.sourceSelect.value = config.dataSource || 'dump1090';
             elements.adsbRange.value = config.adsbRangeNm || 30;
             elements.camAz.value = config.camAzimuth;
@@ -484,7 +486,7 @@
         }
 
         function saveSettings() {
-            config.ip = elements.dumpIp.value;
+            config.dumpPath = normalizeDumpPath(elements.dumpIp.value);
             config.dataSource = elements.sourceSelect.value;
             config.adsbRangeNm = Math.min(Math.max(parseFloat(elements.adsbRange.value) || 30, 1), 250);
             config.lat = parseFloat(elements.myLat.value) || 0;
@@ -501,7 +503,8 @@
             // Keep legacy keys so existing users are still covered if they downgrade
             localStorage.setItem('skywatcher_lat', elements.myLat.value);
             localStorage.setItem('skywatcher_lon', elements.myLon.value);
-            localStorage.setItem('skywatcher_ip', elements.dumpIp.value);
+            localStorage.setItem('skywatcher_dump_path', config.dumpPath);
+            localStorage.setItem('skywatcher_ip', config.dumpPath);
             localStorage.setItem('skywatcher_az', elements.camAz.value);
             localStorage.setItem('skywatcher_clear', elements.snapClearOnly.checked);
             localStorage.setItem('skywatcher_map_overlay', config.mapOverlay);
@@ -593,21 +596,26 @@
         }
 
         function getDump1090CandidateUrls() {
+            const normalizedPrefix = normalizeDumpPath(config.dumpPath);
             const dumpPaths = [
-                'dump1090-fa/data/aircraft.json',
+                `${normalizedPrefix}/data/aircraft.json`,
                 'data/aircraft.json'
             ];
-            const customHost = (config.ip || '').trim();
-
-            if (customHost) {
-                const base = customHost.startsWith('http://') || customHost.startsWith('https://')
-                    ? customHost
-                    : `${window.location.protocol}//${customHost}`;
-                const normalizedBase = base.replace(/\/+$/, '');
-                return dumpPaths.map((path) => `${normalizedBase}/${path}`);
-            }
-
             return dumpPaths.map((path) => new URL(path, window.location.href).toString());
+        }
+
+        function normalizeDumpPath(rawValue) {
+            const fallbackPath = 'dump1090-fa';
+            const raw = String(rawValue || '').trim();
+            if (!raw) return fallbackPath;
+
+            try {
+                const parsed = new URL(raw);
+                const parsedPath = (parsed.pathname || '').replace(/^\/+|\/+$/g, '');
+                return parsedPath || fallbackPath;
+            } catch (_) {
+                return raw.replace(/^\/+|\/+$/g, '') || fallbackPath;
+            }
         }
 
         function updateDataStatus(connected, errorMsg = "", sourceName = 'Data') {
