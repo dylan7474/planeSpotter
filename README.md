@@ -37,10 +37,21 @@ http://localhost:8081
 
 > Note: Webcam access generally requires `http://localhost` or `https`.
 
+### Cloudflare Zero Trust / Tunnel setup note
+
+If you deploy with `./deploy.sh`, the generated container now proxies `/dump1090-fa/*` to your local Dump1090 host internally.  
+Default upstream is `http://192.168.50.100:8080`, and you can override it when starting the container with:
+
+```bash
+DUMP1090_BASE_URL=http://192.168.50.100:8080 ./deploy.sh 3013
+```
+
+With this setup, your single Cloudflare Zero Trust public URL only needs to expose the Plane Spotter web container; the browser fetches `/dump1090-fa/data/aircraft.json` from that same origin.
+
 ## Basic Controls
 
 - **Start Monitoring**: Starts/stops polling your Dump1090 JSON feed.
-- **DUMP1090 IP:PORT**: Host and port of your receiver (example: `192.168.50.100:8080`).
+- **DUMP1090 Host:Port (Optional)**: Leave blank to use `/dump1090-fa/` from the same site origin (recommended behind Cloudflared). Or set a host:port like `192.168.50.100:8080`.
 - **Your Lat / Your Lon**: Your observer position used for distance/bearing calculations.
 - **Cam Azimuth (East=90)**: Camera direction in degrees.
 - **Max Capture Distance**: Limits auto-capture to nearby aircraft.
