@@ -51,7 +51,7 @@ With this setup, your single Cloudflare Zero Trust public URL only needs to expo
 ## Basic Controls
 
 - **Start Monitoring**: Starts/stops polling your Dump1090 JSON feed.
-- **DUMP1090 Host:Port (Optional)**: Leave blank to auto-try same-origin paths (`dump1090-fa/data/aircraft.json` then `data/aircraft.json`), which works better when the app is served from a sub-path behind Cloudflare Zero Trust. Or set a host:port like `192.168.50.100:8080`.
+- **Dump1090 Proxy Path (Optional)**: Browser requests stay same-origin. Default is `dump1090-fa`, so the UI fetches `dump1090-fa/data/aircraft.json` (then `data/aircraft.json` fallback) from the Plane Spotter server, and that server proxies to your Dump1090 host.
 - **Your Lat / Your Lon**: Your observer position used for distance/bearing calculations.
 - **Cam Azimuth (East=90)**: Camera direction in degrees.
 - **Max Capture Distance**: Limits auto-capture to nearby aircraft.
