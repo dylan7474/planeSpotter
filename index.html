@@ -121,8 +121,8 @@
                         </select>
                     </div>
                     <div>
-                        <label class="block text-xs text-slate-400 mb-1">DUMP1090 IP:PORT</label>
-                        <input id="dump-ip" type="text" value="192.168.50.100:8080" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
+                        <label class="block text-xs text-slate-400 mb-1">DUMP1090 Host:Port (Optional)</label>
+                        <input id="dump-ip" type="text" value="" placeholder="Leave blank to use /dump1090-fa/ on this site" class="w-full bg-slate-700 p-2 rounded text-sm outline-none border border-slate-600 focus:border-blue-500">
                     </div>
                     <div>
                         <label class="block text-xs text-slate-400 mb-1">ADSB.lol Range (NM)</label>
@@ -218,7 +218,7 @@
     <script>
         // State
         let config = {
-            ip: '192.168.50.100:8080',
+            ip: '',
             dataSource: 'dump1090',
             adsbRangeNm: 30,
             lat: 0,
@@ -557,7 +557,7 @@
                 sourceName = 'ADSB.lol';
                 url = `https://api.adsb.lol/v2/lat/${config.lat}/lon/${config.lon}/dist/${config.adsbRangeNm}`;
             } else {
-                url = `http://${config.ip}/dump1090-fa/data/aircraft.json`;
+                url = getDump1090Url();
             }
             
             try {
@@ -572,6 +572,19 @@
                 const diagnostic = describeFetchError(err, sourceName, url);
                 updateDataStatus(false, diagnostic.shortMessage, sourceName);
             }
+        }
+
+        function getDump1090Url() {
+            const dumpPath = '/dump1090-fa/data/aircraft.json';
+            const customHost = (config.ip || '').trim();
+
+            if (!customHost) return dumpPath;
+
+            if (customHost.startsWith('http://') || customHost.startsWith('https://')) {
+                return `${customHost.replace(/\/+$/, '')}${dumpPath}`;
+            }
+
+            return `${window.location.protocol}//${customHost}${dumpPath}`;
         }
 
         function updateDataStatus(connected, errorMsg = "", sourceName = 'Data') {

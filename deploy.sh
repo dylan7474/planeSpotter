@@ -32,12 +32,15 @@ IGNORE_EOF
 echo "Generating server.js..."
 cat <<'SERVER_EOF' > server.js
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
 const PORT = Number(process.env.PORT) || 3013;
 const STATIC_ROOT = process.env.STATIC_ROOT || __dirname;
+const DUMP1090_BASE_URL = process.env.DUMP1090_BASE_URL || 'http://192.168.50.100:8080';
+const dumpBaseUrl = new URL(DUMP1090_BASE_URL);
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -116,11 +119,56 @@ const serveStatic = (req, res, url) => {
   });
 };
 
+const proxyDump1090 = (req, res, url) => {
+  const upstreamPath = url.pathname + (url.search || '');
+  const isHttps = dumpBaseUrl.protocol === 'https:';
+  const transport = isHttps ? https : http;
+
+  const proxyReq = transport.request({
+    protocol: dumpBaseUrl.protocol,
+    hostname: dumpBaseUrl.hostname,
+    port: dumpBaseUrl.port || (isHttps ? 443 : 80),
+    method: req.method,
+    path: upstreamPath,
+    headers: {
+      ...req.headers,
+      host: dumpBaseUrl.host,
+      connection: 'close',
+      'x-forwarded-host': req.headers.host || '',
+      'x-forwarded-proto': req.socket.encrypted ? 'https' : 'http'
+    }
+  }, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('error', (err) => {
+    console.error('Dump1090 proxy error:', err.message);
+    res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      error: 'dump1090_proxy_error',
+      message: err.message
+    }));
+  });
+
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    proxyReq.end();
+    return;
+  }
+
+  req.pipe(proxyReq);
+};
+
 http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+  if (url.pathname.startsWith('/dump1090-fa/')) {
+    proxyDump1090(req, res, url);
+    return;
+  }
   serveStatic(req, res, url);
 }).listen(PORT, () => {
   console.log(`Plane Spotter static server listening on port ${PORT}`);
+  console.log(`Proxying /dump1090-fa/ to ${dumpBaseUrl.origin}`);
 });
 SERVER_EOF
 
@@ -147,6 +195,7 @@ echo "Starting new container..."
 docker run -d \
   --name "$CONTAINER_NAME" \
   -p "$PORT_ARG:$PORT_ARG" \
+  -e DUMP1090_BASE_URL="${DUMP1090_BASE_URL:-http://192.168.50.100:8080}" \
   --restart unless-stopped \
   "$IMAGE_NAME"
 
