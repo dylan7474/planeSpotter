@@ -547,44 +547,67 @@
 
         // --- Data Fetching ---
         async function fetchData() {
-            let url = '';
-            let sourceName = 'Dump1090';
+            const sourceName = config.dataSource === 'adsb_lol' ? 'ADSB.lol' : 'Dump1090';
+
             if (config.dataSource === 'adsb_lol') {
                 if (!config.lat || !config.lon) {
                     updateDataStatus(false, "Set your Lat/Lon first for ADSB.lol");
                     return;
                 }
-                sourceName = 'ADSB.lol';
-                url = `https://api.adsb.lol/v2/lat/${config.lat}/lon/${config.lon}/dist/${config.adsbRangeNm}`;
-            } else {
-                url = getDump1090Url();
-            }
-            
-            try {
-                const data = await fetchJsonWithDiagnostics(url, sourceName);
-                let aircraft = Array.isArray(data.aircraft)
-                    ? data.aircraft
-                    : (Array.isArray(data.ac) ? data.ac : []);
 
-                updateDataStatus(true, '', sourceName);
-                processPlanes(aircraft);
-            } catch (err) {
-                const diagnostic = describeFetchError(err, sourceName, url);
-                updateDataStatus(false, diagnostic.shortMessage, sourceName);
+                const url = `https://api.adsb.lol/v2/lat/${config.lat}/lon/${config.lon}/dist/${config.adsbRangeNm}`;
+                try {
+                    const data = await fetchJsonWithDiagnostics(url, sourceName);
+                    const aircraft = Array.isArray(data.aircraft)
+                        ? data.aircraft
+                        : (Array.isArray(data.ac) ? data.ac : []);
+                    updateDataStatus(true, '', sourceName);
+                    processPlanes(aircraft);
+                } catch (err) {
+                    const diagnostic = describeFetchError(err, sourceName, url);
+                    updateDataStatus(false, diagnostic.shortMessage, sourceName);
+                }
+                return;
             }
+
+            const candidateUrls = getDump1090CandidateUrls();
+            let lastError = null;
+
+            for (const url of candidateUrls) {
+                try {
+                    const data = await fetchJsonWithDiagnostics(url, sourceName);
+                    const aircraft = Array.isArray(data.aircraft)
+                        ? data.aircraft
+                        : (Array.isArray(data.ac) ? data.ac : []);
+                    updateDataStatus(true, '', sourceName);
+                    processPlanes(aircraft);
+                    return;
+                } catch (err) {
+                    lastError = err;
+                }
+            }
+
+            const fallbackUrl = candidateUrls[candidateUrls.length - 1] || '';
+            const diagnostic = describeFetchError(lastError, sourceName, fallbackUrl);
+            updateDataStatus(false, diagnostic.shortMessage, sourceName);
         }
 
-        function getDump1090Url() {
-            const dumpPath = '/dump1090-fa/data/aircraft.json';
+        function getDump1090CandidateUrls() {
+            const dumpPaths = [
+                'dump1090-fa/data/aircraft.json',
+                'data/aircraft.json'
+            ];
             const customHost = (config.ip || '').trim();
 
-            if (!customHost) return dumpPath;
-
-            if (customHost.startsWith('http://') || customHost.startsWith('https://')) {
-                return `${customHost.replace(/\/+$/, '')}${dumpPath}`;
+            if (customHost) {
+                const base = customHost.startsWith('http://') || customHost.startsWith('https://')
+                    ? customHost
+                    : `${window.location.protocol}//${customHost}`;
+                const normalizedBase = base.replace(/\/+$/, '');
+                return dumpPaths.map((path) => `${normalizedBase}/${path}`);
             }
 
-            return `${window.location.protocol}//${customHost}${dumpPath}`;
+            return dumpPaths.map((path) => new URL(path, window.location.href).toString());
         }
 
         function updateDataStatus(connected, errorMsg = "", sourceName = 'Data') {
